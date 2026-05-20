@@ -1,0 +1,45 @@
+{
+  "title": "Lazy CWL Information",
+  "description": "Our CWL is optional. If you don't want it, just stay in the FWA clans.\nWe play \"Lazy CWL\", this means we KEEP FWA BASES!\nYes, we will lose wars for sure, but that doesn't matter!\nEvery player needs just 8 stars from 7 attacks for maximum medals, that's your aim.",
+  "color": "#00AAFF",
+
+  "fields": [
+    {
+      "name": "Lazy CWL Clans",
+      "value": "We have separate clans for CWL, the PK CWL clans, which is an abbreviation for Pak CWL.\nType this in clan search to see them all.\n\nWe hop back and forth between our home (FWA) clans and the PK CWL clans for a week, so we will have CWL and FWA at the same time for maximum profit.\nThe PKC clans are not meant to stay in for long. Hop in, do your daily attack, head home.\nIt's wise to get your CC filled in your home clan, as the PKC clans have less members and no perks.",
+      "inline": false
+    },
+
+    {
+      "name": "Important Rules (Part 1)",
+      "value": "Important:\nYou have to be in a PKC clan at start time to get into the season roster. Only bases from the season roster can be put into CWL wars, so don't join too late.\nIf your assigned clan is full, just join the next lower one.\nIf you got problems to get 8 stars in the last season, just join the next lower clan.\nOnly fresh stars count in CWL!\n2 star a previously 1 starred base: you get 1 star.\nHit a previously 3 starred base: you get nothing!",
+      "inline": false
+    },
+    {
+      "name": "Important Rules (Part 2)",
+      "value": "Do NOT contribute capital gold in the PKC clans!\nPKC clans get dumped sooner or later, so all contributions go down the drain!\nCollect the gold and contribute it in your home clan.",
+      "inline": false
+    },
+
+    {
+      "name": "**VERY Important:**",
+      "value": "After your PKC clan matched: HEAD HOME!\nDon't slack there! Just hop in, do your daily attack, head home.\nSlacking there makes tracking players and ranks difficult and may lead to 40vs40 FWA syncs, which are more mismatch prone.\nOccasionally slackers will get kicked! This includes an automatic temporary 24 hour ban. Don't cry, you've been warned.",
+      "inline": false
+    },
+{
+      "name": "Attack rules",
+      "value": "Attack rules depend on the PKC clan you're in, read the clan description:\n\n\"hit your mirror\":\n... well ... i guess the title says it all ...\nMaybe small changes if players struggle to get stars, let's see :-)\n\n\"free for all\":\n1.) Hit any target, first come first serve.\n2.) EXCEPTION: Once you reached 8 stars, do NOT attack the Bottom10 bases in the first 12 hours of a war day.",
+      "inline": false
+    },
+
+    {
+      "name": "Benchwarmers",
+      "value": "If you got minis who don't attack in CWL but still want to leech some medals, then announce them as benchwarmers.\nThey'll get a separate invite to a Master 1 clan and have to join before start time.\nThey won't be put into daily war rosters, so they keep \"warming the bench\" :-)\nBy just being in the season roster they'll get 20% of max medals, in Master 1 that would be 68.\n\nFor more CWL talk join our chatroom #cwl_chat",
+      "inline": false
+    }
+  ],
+
+  "footer": {
+    "text": "Created: {time}"
+  }
+}

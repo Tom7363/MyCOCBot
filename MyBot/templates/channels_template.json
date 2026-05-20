@@ -1,0 +1,6 @@
+{
+  "Title": "📁 Server Channel Directory",
+  "Description": "Here is the current category and channel index for **{{SERVER_NAME}}**:\n\n{{CHANNEL_TREE}}",
+  "Color": "10181046",
+  "FooterText": "Pak Admin Bot System • Generated for {{USERNAME}}"
+}

@@ -1,0 +1,28 @@
+{
+  "title": "FWA Information",
+  "color": "#00AAFF",
+
+  "fields": [
+    {
+      "name": "What is 💎 FWA 💎?",
+      "value": "This means Farm War Alliance. The Farm War Alliance was created to allow farming clans to participate in arranged wars with the other farming clans that understand the farm war concept. We are an International group of over 600+ proud clans. We take turns winning and all have similar easy to 3 star bases. This allows our clans to gain considerable clan XP and loot.\n\nThe idea with our arranged wars is to get easy loot and stars, with a small army cost. Without all the stress of real wars. You can play casually, having your heroes upgrading, this doesn't matter much. All the bases are built in a way to allow for easy 2 stars or 3 stars.\n\nIf you need to have a FWA base, you can use ?bases command or check this page:\nhttp://www.farmwaralliance.org/base-design\n\nYou can also type ?th18 / ?th17 / ?th16 / ?th15 / ?th14 / ?th13 / ?th12 / ?th11 to get the correct TH level base link and screenshot.\n\nIf you understand our concept and are ready to join.",
+      "inline": false
+    },
+
+    {
+      "name": "List of all FWA Bases (Part 1)",
+      "value": "TH18 FWA BASE\n[Click here to copy](https://link.clashofclans.com/en?action=OpenLayout&id=TH18%3AWB%3AAAAAOwAAAAJqhZdSeyeZec6lDIlqiQ3n)\n\nTH17 FWA BASE\n[Click here to copy](https://link.clashofclans.com/en?action=OpenLayout&id=TH17%3AWB%3AAAAAOwAAAAJTmeRWBGyOp4aQ0NB1fyv1)\n\nTH16 FWA BASE\n[Click here to copy](https://link.clashofclans.com/en?action=OpenLayout&id=TH16%3AWB%3AAAAAOwAAAAIsOWurrW-TzTdWx9-qh0y)\n\nTH15 FWA BASE\n[Click here to copy](https://link.clashofclans.com/en?action=OpenLayout&id=TH15%3AWB%3AAAAAIgAAAAJrZLFejE01nG2IP8WzFSK)",
+      "inline": false
+    },
+
+    {
+      "name": "List of all FWA Bases (Part 2)",
+      "value": "TH14 FWA BASE\n[Click here to copy](https://link.clashofclans.com/en?action=OpenLayout&id=TH14%3AWB%3AAAAAXAAAAAGff1CAUDEC46bGhWtNQjf1)\n\nTH13 FWA BASE\n[Click here to copy](https://link.clashofclans.com/en?action=OpenLayout&id=TH13%3AWB%3AAAAAKQAAAAKAgRq4gPEAcFdXuDVC-raG)\n\nTH12 FWA BASE\n[Click here to copy](https://link.clashofclans.com/en?action=OpenLayout&id=TH12%3AWB%3AAAAANwAAAAI7ywDNUGT6uzMHYKqEHTZE)\n\nTH11 FWA BASE\n[Click here to copy](https://link.clashofclans.com/en?action=OpenLayout&id=TH11%3AWB%3AAAAABAAAAALSzKg34Cbn-JgjDGVAlnAV)\n\nFor detailed infos type: ?th11 - ?th12 - ?th13 - ?th14 - ?th15 - ?th16 - ?th17 - ?th18",
+      "inline": false
+    }
+  ],
+
+  "footer": {
+    "text": "Created: {time}"
+  }
+}

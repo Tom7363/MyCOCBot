@@ -1,0 +1,17 @@
+{
+  "title": "Weight",
+  "description": "{grid:orderby weight desc}
+{grid:foreach}
+{if col:weight > 177000}
+{col:player} – {col:weight} kg
+{endif}
+{end}", 
+  "color": "#00AAFF",
+
+  "thumbnail": "images/welcome_thumb.png",
+  "image": "images/welcome_banner.jpg",
+
+  "footer": {
+    "text": "Created: {time}"
+  }
+}

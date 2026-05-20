@@ -1,0 +1,16 @@
+{
+  "title": "Willkommen {user}",
+  "description": "Schön, dass du auf **{server}** bist!",
+  "color": "#00AAFF",
+
+  "thumbnail": "images/welcome_thumb.png",
+  "image": "images/welcome_banner.jpg",
+
+  "fields": [
+    { "name": "Beigetreten", "value": "{date}", "inline": false }
+  ],
+
+  "footer": {
+    "text": "ID: {userid}"
+  }
+}
