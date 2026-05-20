@@ -1,0 +1,1 @@
+ADD HERE YOUR DISCORD BOT TOKEN and save it as token.txt
