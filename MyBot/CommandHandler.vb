@@ -46,6 +46,8 @@ Public Class CommandHandler
 
                              Case "channels"
                                  Await HandleChannelsCommandAsync(command)
+                             Case "showclans"
+                                 Await HandleShowClansCommandAsync(command)
 
                              Case Else
                                  Await command.RespondAsync("❌ Unknown command.", ephemeral:=True)
@@ -66,14 +68,17 @@ Public Class CommandHandler
         ' -----------------------------------------------------------------
         ' COMMAND: /ping
         ' -----------------------------------------------------------------
-        Const Version As String = "01.00.00 B"
+        Const Version As String = "01.00.00 C"
         Dim latency As Integer = _client.Latency
         Dim osDescription As String = System.Runtime.InteropServices.RuntimeInformation.OSDescription
+
+        Dim DBConnectionStatus As String = If(OracleDatabaseManager.IsDBConnected(), "Database Connected 🟢", "Database Disconnected 🔴")
 
         Dim responseMessage As String = $"Hello, I am here V {Version} 🚀{Environment.NewLine}" &
                    $"• **Status:** Online 🟢{Environment.NewLine}" &
                    $"• **Latency:** `{latency} ms`{Environment.NewLine}" &
                    $"• **OS:** `{osDescription}`{Environment.NewLine}" &
+                   $"• **DB:** `{DBConnectionStatus}`{Environment.NewLine}" &
                    $"• **System:** `Pak Admin Bot System`"
 
 
@@ -444,4 +449,25 @@ Public Class CommandHandler
         Await command.DeferAsync(ephemeral:=True)
         Await command.FollowupAsync("📂 Generating directory tree of all channels...", ephemeral:=True)
     End Function
+
+    ' /showclans Implementation
+    Private Async Function HandleShowClansCommandAsync(command As SocketSlashCommand) As Task
+        ' Verhindert den 3-Sekunden-Timeout von Discord während der DB-Abfrage
+        Await command.DeferAsync(ephemeral:=False)
+
+        ' Holt die Clan-Liste aus dem Database-Modul
+        Dim clans As List(Of String) = Await OracleDatabaseManager.GetClansAsync()
+
+        ' Erstellt ein optisch ansprechendes Embed im Oracle-Design
+        Dim embedBox As New EmbedBuilder() With {
+            .Title = "Clash of Clans - Registered Clans",
+            .Color = New Color(235, 95, 10), ' Oracle Orange
+            .Description = String.Join(Environment.NewLine, clans),
+            .Timestamp = DateTimeOffset.Now
+        }
+
+        ' Sendet die formatierte Box in den Discord-Kanal
+        Await command.FollowupAsync(embed:=embedBox.Build())
+    End Function
+
 End Class

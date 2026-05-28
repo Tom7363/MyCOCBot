@@ -16,6 +16,20 @@ Module Main
     End Sub
 
     Async Function MainAsync() As Task
+        Console.WriteLine("Checking external IP and Supercell API tokens...")
+        API_COC.DebugPrint("Bot starting - performing initial IP and Token check.")
+
+        Dim keyUpdateSuccess As Boolean = Await API_COC.UpdateKeysAsync()
+
+        If keyUpdateSuccess Then
+            Console.WriteLine($"Token check complete. Active Token: {CocService.apiToken.Substring(0, Math.Min(10, CocService.apiToken.Length))}...")
+            API_COC.DebugPrint("Initial token update successful.")
+        Else
+            Console.WriteLine("⚠️ WARNING: Token update failed. API requests might fail!")
+            API_COC.DebugPrint("Initial token update failed.")
+        End If
+
+
         ' Configure the bot with essential gateway intents
         Dim config = New DiscordSocketConfig() With {
             .GatewayIntents = GatewayIntents.Guilds Or GatewayIntents.GuildMembers,
@@ -51,7 +65,7 @@ Module Main
 
         Await _client.LoginAsync(TokenType.Bot, token)
         Await _client.StartAsync()
-
+        Await OracleDatabaseManager.ConnectDBAsync()
         ' Keeps the application running on your Oracle Linux VM
         Await Task.Delay(-1)
     End Function
