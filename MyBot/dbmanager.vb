@@ -344,6 +344,42 @@ Public Module OracleDatabaseManager
         Return clansList
     End Function
 
+    ''' <summary>
+    ''' Ruft alle Clans aus der Tabelle tracked_clans ab, bei denen das Feld DUMP den Wert '1' hat.
+    ''' </summary>
+    Public Async Function GetDumpClansAsync(guildId As ULong) As Task(Of List(Of Dictionary(Of String, String)))
+        Dim clanList As New List(Of Dictionary(Of String, String))()
+
+        ' Die SQL-Query filtert hier explizit nach DUMP = '1'
+        Dim query As String = "SELECT clan_tag, clan_name, NVL(clan_category, 'Unassigned'), DUMP " &
+                          "FROM tracked_clans " &
+                          "WHERE guild_id = :guildId AND DUMP = '1' " &
+                          "ORDER BY clan_category, clan_name"
+
+        Try
+            Using cmd As New OracleCommand(query, conn)
+                cmd.Parameters.Add(New OracleParameter("guildId", OracleDbType.Varchar2)).Value = guildId.ToString()
+
+                Using reader As OracleDataReader = CType(Await cmd.ExecuteReaderAsync(), OracleDataReader)
+                    While Await reader.ReadAsync()
+                        Dim clanData As New Dictionary(Of String, String)()
+                        clanData("tag") = reader.GetString(0)
+                        clanData("name") = reader.GetString(1)
+                        clanData("category") = reader.GetString(2)
+                        clanData("dump") = reader.GetString(3)
+                        clanList.Add(clanData)
+                    End While
+                End Using
+            End Using
+        Catch ex As Exception
+            Console.WriteLine($"[DB ERROR] GetDumpClansAsync failed: {ex.Message}")
+        End Try
+
+        Return clanList
+    End Function
+
+
+
     '' <summary>
     ''' Saves a new base layout with a name, links, and notes to the Oracle DB.
     ''' </summary>
@@ -426,5 +462,36 @@ Public Module OracleDatabaseManager
             Console.WriteLine($"[DB ERROR] GetLayoutDetailsAsync failed: {ex.Message}")
         End Try
         Return details
+    End Function
+    ''' <summary>
+    ''' Fetches all layout records from the base_layouts table.
+    ''' </summary>
+    Public Async Function GetAllLayoutsAsync() As Task(Of List(Of Dictionary(Of String, String)))
+        Dim recordsList As New List(Of Dictionary(Of String, String))()
+        Dim query As String = "SELECT layout_id, layout_name, coc_link, coc_link_2, image_link, layout_info FROM base_layouts ORDER BY layout_name ASC"
+
+        Try
+            Using cmd As New OracleCommand(query, conn)
+                Using reader As OracleDataReader = CType(Await cmd.ExecuteReaderAsync(), OracleDataReader)
+                    While Await reader.ReadAsync()
+                        Dim details As New Dictionary(Of String, String)()
+
+                        ' Safely map and read row data fields with DBNull validation
+                        details("id") = reader.GetInt32(0).ToString()
+                        details("name") = If(reader.IsDBNull(1), "Unnamed Layout", reader.GetString(1))
+                        details("link1") = If(reader.IsDBNull(2), "", reader.GetString(2))
+                        details("link2") = If(reader.IsDBNull(3), "", reader.GetString(3))
+                        details("image") = If(reader.IsDBNull(4), "", reader.GetString(4))
+                        details("info") = If(reader.IsDBNull(5), "", reader.GetString(5))
+
+                        recordsList.Add(details)
+                    End While
+                End Using
+            End Using
+        Catch ex As Exception
+            Console.WriteLine($"[DB ERROR] GetAllLayoutsAsync failed: {ex.Message}")
+        End Try
+
+        Return recordsList
     End Function
 End Module

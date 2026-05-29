@@ -113,6 +113,10 @@ Public Class ReadyHandler
                                  Dim clanListCmd As New SlashCommandBuilder()
                                  clanListCmd.WithName("clan-list")
                                  clanListCmd.WithDescription("Displays a comprehensive list of all verified clan entries registered here.")
+                                 ' Command Structure setup: /clan-list
+                                 Dim dumpListCmd As New SlashCommandBuilder()
+                                 dumpListCmd.WithName("dump")
+                                 dumpListCmd.WithDescription("Displays a comprehensive list of all clans to dump capital gold.")
 
                                  ' Command Structure: /cl [clan]
                                  Dim clCmd As New SlashCommandBuilder()
@@ -148,13 +152,20 @@ Public Class ReadyHandler
                                  layoutAddCmd.AddOption("image-link", ApplicationCommandOptionType.String, "A URL to a screenshot or image of the base layout", isRequired:=False)
                                  ' Option 5: Information notes (Optional)
                                  layoutAddCmd.AddOption("information", ApplicationCommandOptionType.String, "Additional notes or hints for this layout (e.g., Anti-Air, Legend League)", isRequired:=False)
+                                 ' /bases
+                                 Dim basesCmd = New SlashCommandBuilder() With {
+                                     .Name = "bases",
+                                     .Description = "Displays an overview of FWA base links for all TH"
+                                 }
 
+                                 Await guild.CreateApplicationCommandAsync(basesCmd.Build())
 
                                  Await guild.CreateApplicationCommandAsync(layoutAddCmd.Build())
                                  Await guild.CreateApplicationCommandAsync(layoutCmd.Build())
 
                                  Await guild.CreateApplicationCommandAsync(clCmd.Build())
                                  Await guild.CreateApplicationCommandAsync(clanListCmd.Build())
+                                 Await guild.CreateApplicationCommandAsync(dumpListCmd.Build())
                                  Await guild.CreateApplicationCommandAsync(clanAddCmd.Build())
                                  Await guild.CreateApplicationCommandAsync(clanRemoveCmd.Build())
 

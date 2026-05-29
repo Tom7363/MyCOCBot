@@ -48,7 +48,7 @@ Public Class CommandHandler
                              Case "channels"
                                  Await HandleChannelsCommandAsync(command)
                              Case "showclans"
-                                 Await HandleShowClansCommandAsync(command)
+                                 Await HandleClanListAsync(command)
 
                              Case "status"
                                  ' Add Await here since it pulls live data from Oracle DB
@@ -61,11 +61,16 @@ Public Class CommandHandler
                                  Await ClanManagerCommands.HandleClanRemoveAsync(command)
                              Case "clan-list"
                                  Await ClanManagerCommands.HandleClanListAsync(command)
+                             Case "dump"
+                                 Await ClanManagerCommands.HandleDumpListAsync(command)
+
                              Case "cl"
                                  Await ClanManagerCommands.HandleClCommandAsync(command)
 
                              Case "layout"
                                  Await HandleLayoutCommandAsync(command)
+                             Case "bases"
+                                 Await HandleBasesCommandAsync(command)
                              Case "layout-add"
                                  Await HandleLayoutAddAsync(command)
                              Case Else
@@ -180,10 +185,10 @@ Public Class CommandHandler
         End If
         desc.AppendLine("Click the links below to copy this base layout directly into your Clash of Clans game:")
         desc.AppendLine()
-        desc.AppendLine($"🔗 **[Main Layout Link (Slot 1)]({layoutData("link1")})**")
+        desc.AppendLine($"🔗 **[PAK Layout Link (Slot 1)]({layoutData("link1")})**")
 
         If Not String.IsNullOrEmpty(layoutData("link2")) Then
-            desc.AppendLine($"🔗 **[Backup / Alternative Link (Slot 2)]({layoutData("link2")})**")
+            desc.AppendLine($"🔗 **[Alternative Link (Slot 2)]({layoutData("link2")})**")
         End If
 
         embed.WithDescription(desc.ToString())
@@ -196,6 +201,81 @@ Public Class CommandHandler
         embed.WithFooter(footer:=New EmbedFooterBuilder().WithText("Clash of Clans Layout Service"))
 
         Await command.ModifyOriginalResponseAsync(Sub(p) p.Embed = embed.Build())
+    End Function
+    Public Async Function HandleBasesCommandAsync(command As SocketSlashCommand) As Task
+        ' Verhindert den Discord-Timeout während des Datenbankzugriffs
+        Await command.DeferAsync()
+
+        ' 1. Rufe alle Layout-Datensätze aus der Oracle-DB ab
+        Dim allLayouts As List(Of Dictionary(Of String, String)) = Await OracleDatabaseManager.GetAllLayoutsAsync()
+
+        If allLayouts Is Nothing OrElse allLayouts.Count = 0 Then
+            Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = "❌ No layouts found inside the database.")
+            Return
+        End If
+
+        ' Start des Embed-Aufbaus
+        Dim embedBuilder As New EmbedBuilder() With {
+        .Title = "🛡️ List of all FWA bases",
+        .Color = Color.Purple,
+        .Timestamp = DateTimeOffset.Now
+    }
+
+        Dim desc As New Text.StringBuilder()
+        Dim quickCommandsList As New List(Of String)()
+
+        ' 2. Durchlaufe die Liste rückwärts (oder sortiere sie passend von TH18 bis TH11)
+        ' Wir ordnen die Einträge nach den Town Hall Stufen im Namen an
+        For th As Integer = 18 To 9 Step -1
+            Dim targetThName As String = $"TH{th}"
+
+            ' Finde das passende Layout für die aktuelle TH-Stufe aus der Datenbank-Liste
+            Dim currentLayout = allLayouts.FirstOrDefault(Function(l) l("name").ToUpper().Contains(targetThName))
+
+            If currentLayout IsNot Nothing Then
+                ' Überschrift der Base
+                desc.AppendLine($"**{currentLayout("name").ToUpper()}**")
+
+                ' Link 1 einbinden
+                If Not String.IsNullOrEmpty(currentLayout("link1")) Then
+                    desc.AppendLine($"[👉 Click here to copy]({currentLayout("link1")})")
+                Else
+                    desc.AppendLine("*[👉 Click here to copy (Link missing)]*")
+                End If
+
+                ' Optionalen Link 2 einbinden
+                If Not String.IsNullOrEmpty(currentLayout("link2")) Then
+                    desc.AppendLine($"[👉 Alternative Link]({currentLayout("link2")})")
+                End If
+
+                ' Falls Infos zum Layout in der DB hinterlegt sind, zeigen wir diese an
+                If Not String.IsNullOrEmpty(currentLayout("info")) Then
+                    desc.AppendLine($"📝 *{currentLayout("info")}*")
+                End If
+
+                desc.AppendLine() ' Leerzeile für sauberen Abstand
+
+            End If
+        Next
+        ' Befehl für die Schnellauswahl zur Liste hinzufügen
+        quickCommandsList.Add($"`/layout [Templatename]`")
+
+        embedBuilder.WithDescription(desc.ToString())
+
+        ' 3. Den Info-Block für die Detail-Befehle dynamisch generieren
+        If quickCommandsList.Count > 0 Then
+            ' Kehrt die Liste um, damit die Anzeige von links nach rechts mit ?th11 startet
+            quickCommandsList.Reverse()
+            Dim commandsString As String = String.Join(" - ", quickCommandsList)
+
+            embedBuilder.AddField("ℹ️ Detailed Information",
+            $"For detailed infos about our bases, type:{Environment.NewLine}{commandsString}")
+        End If
+
+        embedBuilder.WithFooter(footer:=New EmbedFooterBuilder().WithText("Clash of Clans Layout Service • MyCOCBot"))
+
+        ' Das fertig zusammengestellte Embed an Discord senden
+        Await command.ModifyOriginalResponseAsync(Sub(p) p.Embed = embedBuilder.Build())
     End Function
 
     Public Async Function HandleAutocompleteAsync(autocomplete As SocketAutocompleteInteraction) As Task
@@ -246,7 +326,7 @@ Public Class CommandHandler
         ' -----------------------------------------------------------------
         ' COMMAND: /ping
         ' -----------------------------------------------------------------
-        Const Version As String = "01.00.00 C"
+        Const Version As String = "01.00.00 D"
         Dim latency As Integer = _client.Latency
         Dim osDescription As String = System.Runtime.InteropServices.RuntimeInformation.OSDescription
 
@@ -322,112 +402,118 @@ Public Class CommandHandler
     End Function
 
     Private Async Function HandleNewsCommandAsync(command As SocketSlashCommand) As Task
-        ' 1. Parameter auslesen (Kanal und Dateiname)
+        Dim gUser = TryCast(command.User, SocketGuildUser)
+        If gUser IsNot Nothing AndAlso gUser.Roles.Any(Function(r) r.Name = "Server Orga") Then
 
+            ' 1. Parameter auslesen (Kanal und Dateiname)
+            Dim targetChannelOption = command.Data.Options.FirstOrDefault(Function(o) o.Name = "channel")
 
-        Dim targetChannelOption = command.Data.Options.FirstOrDefault(Function(o) o.Name = "channel")
+            Dim templateFileOption = command.Data.Options.FirstOrDefault(Function(o) o.Name = "templatefile")
 
-        Dim templateFileOption = command.Data.Options.FirstOrDefault(Function(o) o.Name = "templatefile")
+            Dim errorMessage As String = ""
+            Dim successMessage As String = ""
+            Dim isError As Boolean = False
+            If targetChannelOption IsNot Nothing AndAlso templateFileOption IsNot Nothing Then
+                Dim targetChannel As SocketTextChannel = TryCast(targetChannelOption.Value, SocketTextChannel)
+                Dim targetFileName As String = templateFileOption.Value.ToString()
 
-        Dim errorMessage As String = ""
-        Dim successMessage As String = ""
-        Dim isError As Boolean = False
-        If targetChannelOption IsNot Nothing AndAlso templateFileOption IsNot Nothing Then
-            Dim targetChannel As SocketTextChannel = TryCast(targetChannelOption.Value, SocketTextChannel)
-            Dim targetFileName As String = templateFileOption.Value.ToString()
+                ' Dateiendung absichern
+                If Not targetFileName.ToLower().EndsWith(".json") Then targetFileName &= ".json"
 
-            ' Dateiendung absichern
-            If Not targetFileName.ToLower().EndsWith(".json") Then targetFileName &= ".json"
+                If targetChannel IsNot Nothing Then
+                    ' 2. Platzhalter für die Engine vorbereiten
 
-            If targetChannel IsNot Nothing Then
-                ' 2. Platzhalter für die Engine vorbereiten
+                    Dim avatarUrl As String = command.User.GetAvatarUrl()
+                    If String.IsNullOrEmpty(avatarUrl) Then avatarUrl = command.User.GetDefaultAvatarUrl()
 
-                Dim avatarUrl As String = command.User.GetAvatarUrl()
-                If String.IsNullOrEmpty(avatarUrl) Then avatarUrl = command.User.GetDefaultAvatarUrl()
-
-                Dim placeholders As New Dictionary(Of String, String) From {
+                    Dim placeholders As New Dictionary(Of String, String) From {
                 {"{{USERNAME}}", command.User.Username},
                 {"{{USER_AVATAR}}", avatarUrl},
                 {"{{SERVER_NAME}}", targetChannel.Guild.Name},
                 {"{{CHANNEL_NAME}}", targetChannel.Name}
             }
 
-                ' 3. JSON einlesen und rendern
-                Dim renderedEmbed As Embed = Nothing
-                Try
-                    renderedEmbed = EmbedEngine.Render(targetFileName, placeholders)
-                Catch ex As System.IO.FileNotFoundException
-                    errorMessage = $"[Configuration Error] Template file `{targetFileName}` not found in templates folder."
-                    isError = True
-                Catch ex As Exception
-                    errorMessage = $"[Template Error] Failed to compile JSON: {ex.Message}"
-                    isError = True
-                End Try
-
-                ' 4. Wenn das Render erfolgreich war, den Webhook-Prozess starten
-                If Not isError Then
-                    ' Wir deklarieren Variablen für den Webhook-Client außerhalb, um ihn im Finally sauber zu schließen
-                    Dim webhookClient As Discord.Webhook.DiscordWebhookClient = Nothing
-                    Dim tempWebhook As IWebhook = Nothing
-
+                    ' 3. JSON einlesen und rendern
+                    Dim renderedEmbed As Embed = Nothing
                     Try
-                        ' Prüfen, ob der Bot überhaupt Berechtigungen für Webhooks im Zielkanal hat
-                        Dim existingWebhooks = Await targetChannel.GetWebhooksAsync()
+                        renderedEmbed = EmbedEngine.Render(targetFileName, placeholders)
+                    Catch ex As System.IO.FileNotFoundException
+                        errorMessage = $"[Configuration Error] Template file `{targetFileName}` not found in templates folder."
+                        isError = True
+                    Catch ex As Exception
+                        errorMessage = $"[Template Error] Failed to compile JSON: {ex.Message}"
+                        isError = True
+                    End Try
 
-                        ' Suchen, ob bereits ein vom Bot erstellter Webhook existiert
-                        tempWebhook = existingWebhooks.FirstOrDefault(Function(w) w.Name = "Pak News Webhook")
+                    ' 4. Wenn das Render erfolgreich war, den Webhook-Prozess starten
+                    If Not isError Then
+                        ' Wir deklarieren Variablen für den Webhook-Client außerhalb, um ihn im Finally sauber zu schließen
+                        Dim webhookClient As Discord.Webhook.DiscordWebhookClient = Nothing
+                        Dim tempWebhook As IWebhook = Nothing
 
-                        ' Wenn kein Webhook existiert, erstellen wir einen neuen
-                        If tempWebhook Is Nothing Then
-                            tempWebhook = Await targetChannel.CreateWebhookAsync("Pak News Webhook")
-                        End If
+                        Try
+                            ' Prüfen, ob der Bot überhaupt Berechtigungen für Webhooks im Zielkanal hat
+                            Dim existingWebhooks = Await targetChannel.GetWebhooksAsync()
 
-                        ' Webhook-Client mit der URL initialisieren
-                        ' Webhook-Client sicher über ID und Token initialisieren
-                        webhookClient = New DiscordWebhookClient(tempWebhook.Id, tempWebhook.Token)
+                            ' Suchen, ob bereits ein vom Bot erstellter Webhook existiert
+                            tempWebhook = existingWebhooks.FirstOrDefault(Function(w) w.Name = "Pak News Webhook")
 
-                        ' Das generierte Embed über den Webhook abschicken
-                        ' (Optional: Du kannst hier auch .WithUsername oder .WithAvatarUrl anpassen)
-                        Await webhookClient.SendMessageAsync(
+                            ' Wenn kein Webhook existiert, erstellen wir einen neuen
+                            If tempWebhook Is Nothing Then
+                                tempWebhook = Await targetChannel.CreateWebhookAsync("Pak News Webhook")
+                            End If
+
+                            ' Webhook-Client mit der URL initialisieren
+                            ' Webhook-Client sicher über ID und Token initialisieren
+                            webhookClient = New DiscordWebhookClient(tempWebhook.Id, tempWebhook.Token)
+
+                            ' Das generierte Embed über den Webhook abschicken
+                            ' (Optional: Du kannst hier auch .WithUsername oder .WithAvatarUrl anpassen)
+                            Await webhookClient.SendMessageAsync(
                         text:="",
                         embeds:={renderedEmbed},
                         username:="Pak Admin News System",
                         avatarUrl:="https://discordapp.com"
                     )
 
-                        successMessage = $"🚀 Successfully posted news template `{targetFileName}` into <#{targetChannel.Id}> using a secure webhook!"
+                            successMessage = $"🚀 Successfully posted news template `{targetFileName}` into <#{targetChannel.Id}> using a secure webhook!"
 
-                    Catch ex As Discord.Net.HttpException When ex.DiscordCode = DiscordErrorCode.InsufficientPermissions
-                        errorMessage = "[Permissions Error] The bot lacks 'Manage Webhooks' permission in the target channel."
-                        isError = True
-                    Catch ex As Exception
-                        errorMessage = $"[Webhook Error] Failed to broadcast message: {ex.Message}"
-                        isError = True
-                    Finally
-                        ' Aufräumen: Wenn wir den Webhook-Client genutzt haben, Instanz freigeben
-                        If webhookClient IsNot Nothing Then
-                            webhookClient.Dispose()
+                        Catch ex As Discord.Net.HttpException When ex.DiscordCode = DiscordErrorCode.InsufficientPermissions
+                            errorMessage = "[Permissions Error] The bot lacks 'Manage Webhooks' permission in the target channel."
+                            isError = True
+                        Catch ex As Exception
+                            errorMessage = $"[Webhook Error] Failed to broadcast message: {ex.Message}"
+                            isError = True
+                        Finally
+                            ' Aufräumen: Wenn wir den Webhook-Client genutzt haben, Instanz freigeben
+                            If webhookClient IsNot Nothing Then
+                                webhookClient.Dispose()
+                            End If
+                            ' Falls du den Webhook nach jedem Post wieder restlos löschen möchtest, aktiviere diese Zeile:
+
+                        End Try
+                        If tempWebhook IsNot Nothing Then
+                            Await tempWebhook.DeleteAsync()
                         End If
-                        ' Falls du den Webhook nach jedem Post wieder restlos löschen möchtest, aktiviere diese Zeile:
-                        ' If tempWebhook IsNot Nothing Then Await tempWebhook.DeleteAsync()
-                    End Try
+                    End If
+                Else
+                    errorMessage = "[Input Error] Please select a valid text channel."
+                    isError = True
                 End If
             Else
-                errorMessage = "[Input Error] Please select a valid text channel."
+                errorMessage = "[Input Error] Missing required parameters."
                 isError = True
             End If
-        Else
-            errorMessage = "[Input Error] Missing required parameters."
-            isError = True
-        End If
 
-        ' 5. Finale, vom Try-Catch entkoppelte Antwort an den Administrator (ephemeral)
-        If isError Then
-            Await command.RespondAsync(errorMessage, ephemeral:=True)
+            ' 5. Finale, vom Try-Catch entkoppelte Antwort an den Administrator (ephemeral)
+            If isError Then
+                Await command.RespondAsync(errorMessage, ephemeral:=True)
+            Else
+                Await command.RespondAsync(successMessage, ephemeral:=True)
+            End If
         Else
-            Await command.RespondAsync(successMessage, ephemeral:=True)
+            Await command.RespondAsync("❌ You do not have permission to use this command! Required role: **Server Orga**", ephemeral:=True)
         End If
-
     End Function
 
     Private Async Function HandleThreadEmbedCommandAsync(command As SocketSlashCommand) As Task
@@ -457,7 +543,7 @@ Public Class CommandHandler
                     Next
                 End If
 
-                embedBuilder.WithFooter("Pak Admin Bot System")
+                embedBuilder.WithFooter("`Pak Admin Bot System`")
                 Await command.RespondAsync(embed:=embedBuilder.Build())
             End If
         Else
@@ -553,9 +639,11 @@ Public Class CommandHandler
                 embedBuilder.Description &= Environment.NewLine & Environment.NewLine & finalerText
             End If
 
-            embedBuilder.WithFooter("Pak Admin Bot System")
+            embedBuilder.WithFooter("`Pak Admin Bot System`")
 
             Await command.RespondAsync(embed:=embedBuilder.Build(), ephemeral:=True)
+        Else
+            Await command.RespondAsync("❌ You do not have permission to use this command! Required role: **Server Orga**", ephemeral:=True)
         End If
 
     End Function
@@ -568,7 +656,7 @@ Public Class CommandHandler
         Dim errorMessage As String = ""
         Dim isError As Boolean = False
 
-        If guildUser IsNot Nothing Then
+        If guildUser IsNot Nothing AndAlso guildUser.Roles.Any(Function(r) r.Name = "Server Orga") Then
             Dim guild = guildUser.Guild
             Dim structureText As New StringBuilder()
 
@@ -645,40 +733,16 @@ Public Class CommandHandler
                 errorMessage = $"[System Error] Template engine compilation failure: {ex.Message}"
                 isError = True
             End Try
-        Else
-            errorMessage = "This configuration routine can only run inside a server guild context."
-            isError = True
-        End If
-
-        ' 5. Safely execute asynchronous dispatching (100% immune to BC36943 compiler crashes)
-        If isError Then
-            Await command.RespondAsync(errorMessage, ephemeral:=True)
-        Else
             ' Sends the directory listing privately (ephemeral) so it won't clutter public view
             Await command.RespondAsync(embed:=finalEmbed, ephemeral:=False)
+
+        Else
+            Await command.RespondAsync("❌ You do not have permission to use this command! Required role: **Server Orga**", ephemeral:=True)
         End If
+
         'END of command
     End Function
 
-    ' /showclans Implementation
-    Private Async Function HandleShowClansCommandAsync(command As SocketSlashCommand) As Task
-        ' Verhindert den 3-Sekunden-Timeout von Discord während der DB-Abfrage
-        Await command.DeferAsync(ephemeral:=False)
-
-        ' Holt die Clan-Liste aus dem Database-Modul
-        Dim clans As List(Of String) = Await OracleDatabaseManager.GetClansAsync()
-
-        ' Erstellt ein optisch ansprechendes Embed im Oracle-Design
-        Dim embedBox As New EmbedBuilder() With {
-            .Title = "Clash of Clans - Registered Clans",
-            .Color = New Color(235, 95, 10), ' Oracle Orange
-            .Description = String.Join(Environment.NewLine, clans),
-            .Timestamp = DateTimeOffset.Now
-        }
-
-        ' Sendet die formatierte Box in den Discord-Kanal
-        Await command.FollowupAsync(embed:=embedBox.Build())
-    End Function
     Public Async Function GetResourceUsageEmbedAsync(client As DiscordSocketClient) As Task(Of EmbedBuilder)
         ' 1. Gather Bot Metrics
         Dim currentProcess As Process = Process.GetCurrentProcess()
@@ -714,7 +778,7 @@ Public Class CommandHandler
                        $"**Arch:** {RuntimeInformation.OSArchitecture}{Environment.NewLine}" &
                        $".NET version: {RuntimeInformation.FrameworkDescription}", inline:=False)
 
-        embed.WithFooter(footer:=New EmbedFooterBuilder().WithText("Hosted on Oracle Cloud Free Tier"))
+        embed.WithFooter(footer:=New EmbedFooterBuilder().WithText("Provided by `Pak Admin Bot System`"))
 
         Return embed
     End Function
