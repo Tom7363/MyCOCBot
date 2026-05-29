@@ -346,6 +346,43 @@ Public Class CommandHandler
     End Function
 
     Private Async Function HandleRolesCommandAsync(command As SocketSlashCommand) As Task
+
+        Dim guildUser = TryCast(command.User, SocketGuildUser)
+        If guildUser IsNot Nothing AndAlso guildUser.Roles.Any(Function(r) r.Name = "Server Orga") Then
+            Dim guild As SocketGuild = guildUser.Guild
+            Dim sortierteRollen = guild.Roles.OrderByDescending(Function(r) r.Position).ToList()
+            Dim embedBuilder As New EmbedBuilder() With {
+                                     .Title = $"🛡️ Role Directory for {guild.Name}",
+                                     .Description = $"Total Roles: **{sortierteRollen.Count}**" & Environment.NewLine & "Current Server Hierarchy:",
+                                     .Color = New Color(46, 204, 113)
+                                 }
+            embedBuilder.WithCurrentTimestamp()
+            Console.WriteLine("1")
+            Dim rollenListe As New StringBuilder()
+            For Each rolle As SocketRole In sortierteRollen
+                If rolle.IsEveryone Then Continue For
+                Dim mitgliederAnzahl As Integer = rolle.Members.Count()
+                Dim istManaged As String = If(rolle.IsManaged, "🤖 Bot/System", "👥 User")
+
+                rollenListe.AppendLine($"• <@&{rolle.Id}> | Users: `{mitgliederAnzahl}` | Type: *{istManaged}*")
+
+            Next
+
+            Dim finalerText As String = rollenListe.ToString()
+            If finalerText.Length > 2000 Then
+                embedBuilder.Description &= Environment.NewLine & Environment.NewLine & finalerText.Substring(0, 1900) & "..."
+            Else
+                embedBuilder.Description &= Environment.NewLine & Environment.NewLine & finalerText
+            End If
+
+            embedBuilder.WithFooter("Pak Admin Bot System")
+
+            Await command.RespondAsync(embed:=embedBuilder.Build(), ephemeral:=True)
+        End If
+
+    End Function
+
+    Private Async Function HandleChannelsCommandAsync(command As SocketSlashCommand) As Task
         Dim guildUser = TryCast(command.User, SocketGuildUser)
 
         ' Local variables for error handling out of block scopes
@@ -443,11 +480,6 @@ Public Class CommandHandler
             Await command.RespondAsync(embed:=finalEmbed, ephemeral:=False)
         End If
         'END of command
-    End Function
-
-    Private Async Function HandleChannelsCommandAsync(command As SocketSlashCommand) As Task
-        Await command.DeferAsync(ephemeral:=True)
-        Await command.FollowupAsync("📂 Generating directory tree of all channels...", ephemeral:=True)
     End Function
 
     ' /showclans Implementation
