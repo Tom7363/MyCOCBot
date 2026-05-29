@@ -46,7 +46,7 @@ Module Main
         AddHandler _client.Log, AddressOf LogAsync
         AddHandler _client.Ready, AddressOf _readyHandler.HandleClientReadyAsync ' <-- Redirected to class
         AddHandler _client.SlashCommandExecuted, AddressOf _commandHandler.HandleSlashCommandAsync
-
+        AddHandler _client.AutocompleteExecuted, AddressOf _commandHandler.HandleAutocompleteAsync
         ' Path to the token file in the configuration subdirectory
         Dim tokenPath As String = Path.Combine(AppContext.BaseDirectory, "config", "token.txt")
         Dim token As String = ""

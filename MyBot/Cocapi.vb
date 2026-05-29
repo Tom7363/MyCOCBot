@@ -1,12 +1,14 @@
-﻿Imports System.Net.Http
-Imports System.Net.Http.Headers
-Imports System.Text.Json
-Imports System.Threading.Tasks
-Imports System.IO
+﻿Imports System.IO
 Imports System.Net
+Imports System.Net.Http
+Imports System.Net.Http.Headers
 Imports System.Text
+Imports System.Text.Json
 Imports System.Text.RegularExpressions
+Imports System.Threading.Tasks
 Imports Newtonsoft.Json
+Imports Newtonsoft.Json.Linq ' Make sure Newtonsoft.Json NuGet package is installed
+
 Public Class CocService
     ' Speichert den aktuellen API-Token zentral für alle Klassen
     Public Shared Property apiToken As String = ""
@@ -24,17 +26,8 @@ Public Class API_COC
     ''' Writes debug and execution logs to a local log file.
     ''' </summary>
     Public Shared Sub DebugPrint(s As String)
-        Try
-            Dim dirPath As String = "C:\Temp"
-            If Not Directory.Exists(dirPath) Then Directory.CreateDirectory(dirPath)
+        Console.WriteLine($"{DateTime.Now}: {s}")
 
-            Dim filePath As String = Path.Combine(dirPath, "coc_log.txt")
-            Using file1 As New StreamWriter(filePath, True)
-                file1.WriteLine($"{DateTime.Now}: {s}")
-            End Using
-        Catch ex As Exception
-            Console.WriteLine("[LOG-ERROR] " & ex.Message)
-        End Try
     End Sub
 
     ''' <summary>
@@ -256,6 +249,7 @@ End Class
 Public Class ClashOfClansAPI
     Private ReadOnly _httpClient As HttpClient
     Private ReadOnly _apiToken As String
+    Const BaseUrl As String = "https://api.clashofclans.com/v1/"
 
     ''' <summary>
     ''' Initializes the API client with your secret Supercell Developer Token.
@@ -314,4 +308,29 @@ Public Class ClashOfClansAPI
         ' Returning -1 indicates an error occurred during the process
         Return -1
     End Function
+
+    ''' <summary>
+    ''' Fetches live data from the Supercell Clash of Clans API.
+    ''' </summary>
+    Public Async Function GetClanDataAsync(clanTag As String) As Task(Of JObject)
+        ' URL encode the hash symbol (#52LJV8 becomes %2352LJV8)
+        Dim sanitizedTag As String = clanTag.Replace("#", "%23")
+        Dim endpoint As String = $"{BaseUrl}clans/{sanitizedTag}"
+
+        Try
+            Dim response As HttpResponseMessage = Await _httpClient.GetAsync(endpoint)
+            If response.IsSuccessStatusCode Then
+                Dim jsonString As String = Await response.Content.ReadAsStringAsync()
+                Return JObject.Parse(jsonString)
+            Else
+                Console.WriteLine($"CoC API returned error status: {response.StatusCode} for clan {clanTag}")
+                Return Nothing
+            End If
+        Catch ex As Exception
+            Console.WriteLine($"Network Exception during CoC API fetch: {ex.Message}")
+            Return Nothing
+        End Try
+    End Function
+
 End Class
+

@@ -77,6 +77,86 @@ Public Class ReadyHandler
                                      .Name = "showclans",
                                      .Description = "Displays all registered Clash of Clans clans from the Oracle database"
                                  }
+                                 Dim statusCommandBuilder As New SlashCommandBuilder() With {
+                                 .Name = "status",
+                                 .Description = "Displays the resource utilization of the bot, server, and Oracle DB."
+                                 }
+
+
+                                 ' Command Structure setup: /clan-add [tag] [category]
+                                 Dim clanAddCmd As New SlashCommandBuilder()
+                                 clanAddCmd.WithName("clan-add")
+                                 clanAddCmd.WithDescription("Adds a brand new clan target entry to the active guild database layout.")
+                                 clanAddCmd.AddOption("tag", ApplicationCommandOptionType.String, "The structural tag id belonging to the clan (e.g. #52LJV8)", isRequired:=True)
+
+                                 ' Establish custom restriction array inputs (Choices dropdown)
+                                 Dim categoryOption As New SlashCommandOptionBuilder() With {
+                                .Name = "category",
+                                .Description = "The functional operating category mapping for this clan tracking stream.",
+                                .Type = ApplicationCommandOptionType.String,
+                                .IsRequired = True
+                                }
+
+                                 categoryOption.AddChoice("FWA", "FWA")
+                                 categoryOption.AddChoice("CWL", "CWL")
+                                 categoryOption.AddChoice("CWL Backup", "CWL Backup")
+
+                                 clanAddCmd.AddOption(categoryOption)
+
+                                 ' Command Structure setup: /clan-remove [tag]
+                                 Dim clanRemoveCmd As New SlashCommandBuilder()
+                                 clanRemoveCmd.WithName("clan-remove")
+                                 clanRemoveCmd.WithDescription("Removes a registered clan target entry away from the server tracking logs.")
+                                 clanRemoveCmd.AddOption("tag", ApplicationCommandOptionType.String, "The specific targeted tracker tag you want dropped.", isRequired:=True)
+
+                                 ' Command Structure setup: /clan-list
+                                 Dim clanListCmd As New SlashCommandBuilder()
+                                 clanListCmd.WithName("clan-list")
+                                 clanListCmd.WithDescription("Displays a comprehensive list of all verified clan entries registered here.")
+
+                                 ' Command Structure: /cl [clan]
+                                 Dim clCmd As New SlashCommandBuilder()
+                                 clCmd.WithName("cl")
+                                 clCmd.WithDescription("Shows the direct link to join a specific tracked clan.")
+
+                                 ' Important: Set IsAutocomplete = True
+                                 clCmd.AddOption("clan", ApplicationCommandOptionType.String, "Type to search for a clan from the database...", isRequired:=True, isAutocomplete:=True)
+                                 ' Command Structure: /layout [name]
+                                 Dim layoutCmd As New SlashCommandBuilder()
+                                 layoutCmd.WithName("layout")
+                                 layoutCmd.WithDescription("Displays a stored base layout with both links and image preview.")
+
+                                 ' IsAutocomplete must be set to True
+                                 layoutCmd.AddOption("name", ApplicationCommandOptionType.String, "Type to search for a layout...", isRequired:=True, isAutocomplete:=True)
+
+
+                                 ' Command Structure: /layout-add [name] [coc-link-1] [coc-link-2] [image-link]
+                                 Dim layoutAddCmd As New SlashCommandBuilder()
+                                 layoutAddCmd.WithName("layout-add")
+                                 layoutAddCmd.WithDescription("Adds a new base layout with links and an optional preview image to the database.")
+
+                                 ' Option 1: Name (Required)
+                                 layoutAddCmd.AddOption("name", ApplicationCommandOptionType.String, "The name of the layout (e.g., TH16 War Base)", isRequired:=True)
+
+                                 ' Option 2: First CoC Link (Required)
+                                 layoutAddCmd.AddOption("coc-link-1", ApplicationCommandOptionType.String, "The primary Clash of Clans copy link", isRequired:=True)
+
+                                 ' Option 3: Second CoC Link (Optional)
+                                 layoutAddCmd.AddOption("coc-link-2", ApplicationCommandOptionType.String, "An alternative or backup Clash of Clans copy link", isRequired:=False)
+
+                                 ' Option 4: Image Link (Optional)
+                                 layoutAddCmd.AddOption("image-link", ApplicationCommandOptionType.String, "A URL to a screenshot or image of the base layout", isRequired:=False)
+                                 ' Option 5: Information notes (Optional)
+                                 layoutAddCmd.AddOption("information", ApplicationCommandOptionType.String, "Additional notes or hints for this layout (e.g., Anti-Air, Legend League)", isRequired:=False)
+
+
+                                 Await guild.CreateApplicationCommandAsync(layoutAddCmd.Build())
+                                 Await guild.CreateApplicationCommandAsync(layoutCmd.Build())
+
+                                 Await guild.CreateApplicationCommandAsync(clCmd.Build())
+                                 Await guild.CreateApplicationCommandAsync(clanListCmd.Build())
+                                 Await guild.CreateApplicationCommandAsync(clanAddCmd.Build())
+                                 Await guild.CreateApplicationCommandAsync(clanRemoveCmd.Build())
 
                                  ' Zusammen mit den anderen Commands an Discord senden
                                  Await guild.CreateApplicationCommandAsync(showClansCmd.Build())
@@ -93,6 +173,8 @@ Public Class ReadyHandler
                                  Await guild.CreateApplicationCommandAsync(rolesCmd.Build())
                                  Await guild.CreateApplicationCommandAsync(channelsCmd.Build())
                                  Await guild.CreateApplicationCommandAsync(templCmd.Build())
+                                 Await guild.CreateApplicationCommandAsync(statusCommandBuilder.Build())
+
 
                                  Console.WriteLine($"[SYSTEM] Slash commands successfully registered on guild: {guild.Name}")
                              Catch ex As Exception
@@ -110,28 +192,6 @@ Public Class ReadyHandler
         Return Task.CompletedTask
     End Function
 
-    ''' <summary>
-    ''' This is the actual event handler that Discord.Net calls when the bot logs in successfully.
-    ''' </summary>
-    Private Async Function ReadyAsyncHandler() As Task
-        Try
-            Console.WriteLine("Bot is connected and ready!")
-            API_COC.DebugPrint("Discord Bot successfully connected. Starting background tasks.")
-
-            ' 1. Start the periodic IP check task in the background (Non-blocking)
-            ' Task.Run ensures this loop doesn't freeze the main Discord thread.
-            Dim backgroundIPCheck = Task.Run(Async Function()
-                                                 Await StartPeriodicIPUpdateLoopAsync()
-                                             End Function)
-
-            ' 2. (Optional) Here you can register your Slash Commands like /showclans or /ping
-            ' Await RegisterSlashCommandsAsync()
-
-        Catch ex As Exception
-            Console.WriteLine("[ERROR] Exception inside ReadyAsyncHandler: " & ex.Message)
-            API_COC.DebugPrint("Critical failure in ReadyAsyncHandler: " & ex.Message)
-        End Try
-    End Function
 
     ''' <summary>
     ''' An infinite loop that triggers the Supercell API key renewal every single hour.

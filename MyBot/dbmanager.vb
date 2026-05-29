@@ -15,6 +15,7 @@ Public Module OracleDatabaseManager
             conn = Await GetCloudConnectionAsync()
             Return conn
         End If
+        Return Nothing
     End Function
 
     Public Function IsDBConnected() As Boolean
@@ -234,5 +235,196 @@ Public Module OracleDatabaseManager
         End If
 
         Return clanList
+    End Function
+
+    Public Async Function GetDatabaseStatsAsync() As Task(Of Dictionary(Of String, String))
+        Dim stats As New Dictionary(Of String, String) From {
+            {"SizeMB", "N/A"},
+            {"Sessions", "N/A"}
+        }
+
+        Try
+            If conn IsNot Nothing AndAlso conn.State = System.Data.ConnectionState.Closed Then
+                Await conn.OpenAsync()
+            End If
+
+            ' Query 1: Get total space allocated by user segments in Megabytes
+            Dim sizeQuery As String = "SELECT NVL(SUM(bytes) / 1024 / 1024, 0) FROM user_segments"
+            Using cmdSize As New OracleCommand(sizeQuery, conn)
+                Dim sizeResult = Await cmdSize.ExecuteScalarAsync()
+                If sizeResult IsNot DBNull.Value Then
+                    stats("SizeMB") = Convert.ToDouble(sizeResult).ToString("F2") & " MB"
+                End If
+            End Using
+
+            ' Query 2: Get active user sessions for your connection pool limit
+            Dim sessionQuery As String = "SELECT COUNT(*) FROM v$session WHERE username = USER"
+            Using cmdSessions As New OracleCommand(sessionQuery, conn)
+                Dim sessionResult = Await cmdSessions.ExecuteScalarAsync()
+                If sessionResult IsNot DBNull.Value Then
+                    stats("Sessions") = sessionResult.ToString()
+                End If
+            End Using
+        Catch ex As Exception
+            ' Fallback if views are restricted or connection drops
+            stats("SizeMB") = "Error loading"
+            stats("Sessions") = "Error loading"
+        End Try
+
+        Return stats
+    End Function
+
+
+
+    ''' <summary>
+    ''' Upserts a clan tracking record along with its operational choice category.
+    ''' </summary>
+    Public Async Function AddClanAsync(guildId As ULong, clanTag As String, clanName As String, clanCategory As String) As Task(Of Boolean)
+        Dim query As String = "MERGE INTO tracked_clans t USING " &
+                             "(SELECT :guildId as g_id, :clanTag as c_tag FROM dual) src " &
+                             "ON (t.guild_id = src.g_id AND t.clan_tag = src.c_tag) " &
+                             "WHEN NOT MATCHED THEN INSERT (guild_id, clan_tag, clan_name, clan_category, registered_at) " &
+                             "VALUES (src.g_id, src.c_tag, :clanName, :clanCategory, SYSDATE) " &
+                             "WHEN MATCHED THEN UPDATE SET t.clan_category = :clanCategory"
+        Try
+            Using cmd As New OracleCommand(query, conn)
+                cmd.Parameters.Add(New OracleParameter("guildId", OracleDbType.Int64)).Value = Convert.ToInt64(guildId)
+                cmd.Parameters.Add(New OracleParameter("clanTag", OracleDbType.Varchar2)).Value = clanTag.ToUpper()
+                cmd.Parameters.Add(New OracleParameter("clanName", OracleDbType.Varchar2)).Value = clanName
+                cmd.Parameters.Add(New OracleParameter("clanCategory", OracleDbType.Varchar2)).Value = clanCategory
+
+                Await cmd.ExecuteNonQueryAsync()
+                Return True
+            End Using
+
+        Catch ex As Exception
+            Console.WriteLine($"[DB ERROR] AddClanAsync failed: {ex.Message}")
+            Return False
+        End Try
+    End Function
+
+    ''' <summary>
+    ''' Deletes a specific tracked clan within a unique Discord server context.
+    ''' </summary>
+    Public Async Function RemoveClanAsync(guildId As ULong, clanTag As String) As Task(Of Boolean)
+        Dim query As String = "DELETE FROM tracked_clans WHERE guild_id = :guildId AND UPPER(clan_tag) = :clanTag"
+        Try
+            Using cmd As New OracleCommand(query, conn)
+                cmd.Parameters.Add(New OracleParameter("guildId", OracleDbType.Int64)).Value = Convert.ToInt64(guildId)
+                cmd.Parameters.Add(New OracleParameter("clanTag", OracleDbType.Varchar2)).Value = clanTag.ToUpper()
+
+                Dim rowsAffected As Integer = Await cmd.ExecuteNonQueryAsync()
+                Return rowsAffected > 0
+            End Using
+        Catch ex As Exception
+            Console.WriteLine($"[DB ERROR] RemoveClanAsync failed: {ex.Message}")
+            Return False
+        End Try
+    End Function
+
+    ''' <summary>
+    ''' Returns all clans registered to a specific server guild, sorted by classification.
+    ''' </summary>
+    Public Async Function GetClansAsync(guildId As ULong) As Task(Of List(Of Tuple(Of String, String, String)))
+        Dim clansList As New List(Of Tuple(Of String, String, String))()
+        Dim query As String = "SELECT clan_tag, clan_name, NVL(clan_category, 'Unassigned') FROM tracked_clans WHERE guild_id = :guildId ORDER BY clan_category, clan_name"
+
+        Try
+            Using cmd As New OracleCommand(query, conn)
+                cmd.Parameters.Add(New OracleParameter("guildId", OracleDbType.Int64)).Value = Convert.ToInt64(guildId)
+                Using reader As OracleDataReader = CType(Await cmd.ExecuteReaderAsync(), OracleDataReader)
+                    While Await reader.ReadAsync()
+                        clansList.Add(Tuple.Create(reader.GetString(0), reader.GetString(1), reader.GetString(2)))
+                    End While
+                End Using
+            End Using
+        Catch ex As Exception
+            Console.WriteLine($"[DB ERROR] GetClansAsync failed: {ex.Message}")
+        End Try
+        Return clansList
+    End Function
+
+    '' <summary>
+    ''' Saves a new base layout with a name, links, and notes to the Oracle DB.
+    ''' </summary>
+    Public Async Function AddBaseLayoutAsync(guildId As ULong, name As String, cocLink1 As String, cocLink2 As String, imageLink As String, layoutInfo As String) As Task(Of Boolean)
+        Dim query As String = "INSERT INTO base_layouts (guild_id, layout_name, coc_link, coc_link_2, image_link, layout_info) " &
+                         "VALUES (:guildId, :layoutName, :cocLink1, :cocLink2, :imageLink, :layoutInfo)"
+        Try
+            Using cmd As New OracleCommand(query, conn)
+                cmd.Parameters.Add(New OracleParameter("guildId", OracleDbType.Int64)).Value = Convert.ToInt64(guildId)
+                cmd.Parameters.Add(New OracleParameter("layoutName", OracleDbType.Varchar2)).Value = name
+                cmd.Parameters.Add(New OracleParameter("cocLink1", OracleDbType.Varchar2)).Value = cocLink1
+
+                Dim pLink2 As New OracleParameter("cocLink2", OracleDbType.Varchar2)
+                pLink2.Value = If(String.IsNullOrEmpty(cocLink2), DBNull.Value, cocLink2)
+                cmd.Parameters.Add(pLink2)
+
+                Dim pImage As New OracleParameter("imageLink", OracleDbType.Varchar2)
+                pImage.Value = If(String.IsNullOrEmpty(imageLink), DBNull.Value, imageLink)
+                cmd.Parameters.Add(pImage)
+
+                ' Handle optional information text cleanly
+                Dim pInfo As New OracleParameter("layoutInfo", OracleDbType.Varchar2)
+                pInfo.Value = If(String.IsNullOrEmpty(layoutInfo), DBNull.Value, layoutInfo)
+                cmd.Parameters.Add(pInfo)
+
+                Await cmd.ExecuteNonQueryAsync()
+                Return True
+            End Using
+        Catch ex As Exception
+            Console.WriteLine($"[DB ERROR] AddBaseLayoutAsync failed: {ex.Message}")
+            Return False
+        End Try
+    End Function
+
+
+    ''' <summary>
+    ''' Fetches all registered base layouts for a specific server (Guild) to use in Autocomplete.
+    ''' </summary>
+    Public Async Function GetBaseLayoutsAsync(guildId As ULong) As Task(Of List(Of Tuple(Of Integer, String)))
+        ' Returns: Item1 = layout_id, Item2 = layout_name
+        Dim layoutsList As New List(Of Tuple(Of Integer, String))()
+        Dim query As String = "SELECT layout_id, layout_name FROM base_layouts WHERE guild_id = :guildId ORDER BY layout_name"
+
+        Try
+            ' Uses your global connection pooling function
+            Using cmd As New OracleCommand(query, conn)
+                cmd.Parameters.Add(New OracleParameter("guildId", OracleDbType.Int64)).Value = Convert.ToInt64(guildId)
+                Using reader As OracleDataReader = CType(Await cmd.ExecuteReaderAsync(), OracleDataReader)
+                    While Await reader.ReadAsync()
+                        layoutsList.Add(Tuple.Create(reader.GetInt32(0), reader.GetString(1)))
+                    End While
+                End Using
+            End Using
+        Catch ex As Exception
+            Console.WriteLine($"[DB ERROR] GetBaseLayoutsAsync failed: {ex.Message}")
+        End Try
+        Return layoutsList
+    End Function
+
+    ''' <summary>
+    ''' Fetches full details for a single layout including the information field.
+    ''' </summary>
+    Public Async Function GetLayoutDetailsAsync(layoutId As Integer) As Task(Of Dictionary(Of String, String))
+        Dim details As New Dictionary(Of String, String)()
+        Dim query As String = "SELECT layout_name, coc_link, coc_link_2, image_link, layout_info FROM base_layouts WHERE layout_id = :layoutId"
+        Try
+            Using cmd As New OracleCommand(query, conn)
+                cmd.Parameters.Add(New OracleParameter("layoutId", OracleDbType.Int32)).Value = layoutId
+                Using reader As OracleDataReader = CType(Await cmd.ExecuteReaderAsync(), OracleDataReader)
+                    If Await reader.ReadAsync() Then
+                        details("name") = reader.GetString(0)
+                        details("link1") = reader.GetString(1)
+                        details("link2") = If(reader.IsDBNull(2), "", reader.GetString(2))
+                        details("image") = If(reader.IsDBNull(3), "", reader.GetString(3))
+                        details("info") = If(reader.IsDBNull(4), "", reader.GetString(4)) ' Added field
+                    End If
+                End Using
+            End Using
+        Catch ex As Exception
+            Console.WriteLine($"[DB ERROR] GetLayoutDetailsAsync failed: {ex.Message}")
+        End Try
+        Return details
     End Function
 End Module

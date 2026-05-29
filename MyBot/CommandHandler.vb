@@ -1,6 +1,7 @@
 ﻿Imports System
 Imports System.IO
 Imports System.Linq
+Imports System.Runtime.InteropServices
 Imports System.Text
 Imports System.Threading.Tasks
 Imports Discord
@@ -49,6 +50,24 @@ Public Class CommandHandler
                              Case "showclans"
                                  Await HandleShowClansCommandAsync(command)
 
+                             Case "status"
+                                 ' Add Await here since it pulls live data from Oracle DB
+                                 Dim embedBuilder = Await GetResourceUsageEmbedAsync(_client)
+                                 ' Send response to user
+                                 Await command.RespondAsync(embed:=embedBuilder.Build())
+                             Case "clan-add"
+                                 Await ClanManagerCommands.HandleClanAddAsync(command)
+                             Case "clan-remove"
+                                 Await ClanManagerCommands.HandleClanRemoveAsync(command)
+                             Case "clan-list"
+                                 Await ClanManagerCommands.HandleClanListAsync(command)
+                             Case "cl"
+                                 Await ClanManagerCommands.HandleClCommandAsync(command)
+
+                             Case "layout"
+                                 Await HandleLayoutCommandAsync(command)
+                             Case "layout-add"
+                                 Await HandleLayoutAddAsync(command)
                              Case Else
                                  Await command.RespondAsync("❌ Unknown command.", ephemeral:=True)
                          End Select
@@ -58,6 +77,165 @@ Public Class CommandHandler
                  End Function)
 
         Return Task.CompletedTask
+    End Function
+
+    '' <summary>
+    ''' Processes the creation of a new base layout entry via /layout-add
+    ''' </summary>
+    Public Async Function HandleLayoutAddAsync(command As SocketSlashCommand) As Task
+        Dim gUser = TryCast(command.User, SocketGuildUser)
+        If gUser IsNot Nothing AndAlso gUser.Roles.Any(Function(r) r.Name = "Server Orga") Then
+
+            Await command.DeferAsync()
+
+            ' Extract parameters from the options list
+            Dim layoutName As String = command.Data.Options.FirstOrDefault(Function(o) o.Name = "name")?.Value.ToString().Trim()
+            Dim cocLink1 As String = command.Data.Options.FirstOrDefault(Function(o) o.Name = "coc-link-1")?.Value.ToString().Trim()
+            Dim cocLink2 As String = command.Data.Options.FirstOrDefault(Function(o) o.Name = "coc-link-2")?.Value.ToString()?.Trim()
+            Dim imageLink As String = command.Data.Options.FirstOrDefault(Function(o) o.Name = "image-link")?.Value.ToString()?.Trim()
+
+            ' Quick structural check for the main CoC link
+            If Not cocLink1.StartsWith("https://link.clashofclans.com", StringComparison.OrdinalIgnoreCase) Then
+                Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = "❌ The primary link must be a valid Clash of Clans share link (`https://link.clashofclans.com/...`).")
+                Return
+            End If
+
+            ' Quick structural check for the backup CoC link (if provided)
+            If Not String.IsNullOrEmpty(cocLink2) AndAlso Not cocLink2.StartsWith("https://link.clashofclans.com", StringComparison.OrdinalIgnoreCase) Then
+                Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = "❌ The backup link must be a valid Clash of Clans share link (`https://link.clashofclans.com/...`).")
+                Return
+            End If
+            ' Extract parameters from the options list (add this below image-link extraction)
+            Dim layoutInfo As String = command.Data.Options.FirstOrDefault(Function(o) o.Name = "information")?.Value.ToString()?.Trim()
+
+            ' Update the DB insert call parameter list at the bottom:
+            Dim success As Boolean = Await OracleDatabaseManager.AddBaseLayoutAsync(command.GuildId.Value, layoutName, cocLink1, cocLink2, imageLink, layoutInfo)
+
+            '
+            If success Then
+                Dim embed As New EmbedBuilder() With {
+                .Title = "✅ Base Layout Added Successfully",
+                .Color = Color.Green,
+                .Timestamp = DateTimeOffset.Now
+            }
+                embed.AddField("Layout Name", layoutName, inline:=False)
+                embed.AddField("Primary Link", $"[Click here to view link]({cocLink1})", inline:=True)
+
+                If Not String.IsNullOrEmpty(cocLink2) Then
+                    embed.AddField("Backup Link", $"[Click here to view link]({cocLink2})", inline:=True)
+                End If
+                ' Add a field inside the success embed preview:
+                If Not String.IsNullOrEmpty(layoutInfo) Then
+                    embed.AddField("Notes / Information", layoutInfo, inline:=False)
+                End If
+                ' Set preview thumbnail or main image if provided
+                If Not String.IsNullOrEmpty(imageLink) Then
+                    embed.WithThumbnailUrl(imageLink)
+                End If
+
+                embed.WithFooter(footer:=New EmbedFooterBuilder().WithText("Stored securely in Oracle Autonomous Database"))
+
+                Await command.ModifyOriginalResponseAsync(Sub(p) p.Embed = embed.Build())
+            Else
+                Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = "❌ A database exception occurred while saving the base layout.")
+            End If
+        Else
+            Await command.RespondAsync("❌ You do not have permission to use this command! Required role: **Server Orga**", ephemeral:=True)
+        End If
+
+    End Function
+    Public Async Function HandleLayoutCommandAsync(command As SocketSlashCommand) As Task
+        Await command.DeferAsync()
+
+        ' The value received from Autocomplete is the layout_id
+        Dim layoutIdStr As String = command.Data.Options.First().Value.ToString()
+        Dim layoutId As Integer
+
+        If Not Integer.TryParse(layoutIdStr, layoutId) Then
+            Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = "❌ Please select a layout from the autocomplete list preview.")
+            Return
+        End If
+
+        ' Fetch details from Oracle DB
+        Dim layoutData = Await OracleDatabaseManager.GetLayoutDetailsAsync(layoutId)
+
+        If layoutData.Count = 0 Then
+            Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = "❌ Layout could not be found in the database.")
+            Return
+        End If
+
+        ' Build Layout Embed
+        Dim embed As New EmbedBuilder() With {
+            .Title = $"🏰 Base Layout: {layoutData("name")}",
+            .Color = Color.Purple,
+            .Timestamp = DateTimeOffset.Now
+        }
+
+        ' Format Description with both Links
+        Dim desc As New Text.StringBuilder()
+        ' Show information notes right at the top of the description if present
+        If Not String.IsNullOrEmpty(layoutData("info")) Then
+            desc.AppendLine($"📝 *{layoutData("info")}*")
+            desc.AppendLine()
+        End If
+        desc.AppendLine("Click the links below to copy this base layout directly into your Clash of Clans game:")
+        desc.AppendLine()
+        desc.AppendLine($"🔗 **[Main Layout Link (Slot 1)]({layoutData("link1")})**")
+
+        If Not String.IsNullOrEmpty(layoutData("link2")) Then
+            desc.AppendLine($"🔗 **[Backup / Alternative Link (Slot 2)]({layoutData("link2")})**")
+        End If
+
+        embed.WithDescription(desc.ToString())
+
+        ' Attach Screenshot if available
+        If Not String.IsNullOrEmpty(layoutData("image")) Then
+            embed.WithImageUrl(layoutData("image"))
+        End If
+
+        embed.WithFooter(footer:=New EmbedFooterBuilder().WithText("Clash of Clans Layout Service"))
+
+        Await command.ModifyOriginalResponseAsync(Sub(p) p.Embed = embed.Build())
+    End Function
+
+    Public Async Function HandleAutocompleteAsync(autocomplete As SocketAutocompleteInteraction) As Task
+        Select Case autocomplete.Data.CommandName
+            Case "cl"
+                ' Get what the user has typed so far
+                Dim userInput As String = autocomplete.Data.Options.First().Value.ToString().ToLower()
+
+                ' Fetch all registered clans for this server from Oracle DB
+                Dim clans = Await OracleDatabaseManager.GetClansAsync(autocomplete.GuildId.Value)
+
+                ' Filter based on user typing (matches name or tag)
+                Dim matches = clans.Where(Function(c) c.Item1.ToLower().Contains(userInput) OrElse c.Item2.ToLower().Contains(userInput)).Take(25)
+
+                Dim results As New List(Of AutocompleteResult)()
+                For Each clan In matches
+                    ' Preview format in the dropdown list: "PK CWL 27 (#2JLJVYQPU)"
+                    Dim previewText As String = $"{clan.Item2} ({clan.Item1})"
+                    ' Value sent to the bot execution backend will be the clean tag
+                    results.Add(New AutocompleteResult(previewText, clan.Item1))
+                Next
+
+                Await autocomplete.RespondAsync(results)
+            Case "layout"
+                Dim userInput As String = autocomplete.Data.Options.First().Value.ToString().ToLower()
+
+                ' Fetch layouts from Oracle DB
+                Dim layouts = Await OracleDatabaseManager.GetBaseLayoutsAsync(autocomplete.GuildId.Value)
+
+                ' Filter based on what the user typed
+                Dim matches = layouts.Where(Function(l) l.Item2.ToLower().Contains(userInput)).Take(25)
+
+                Dim results As New List(Of AutocompleteResult)()
+                For Each layout In matches
+                    ' User sees the name, Bot receives the layout_id as String
+                    results.Add(New AutocompleteResult(layout.Item2, layout.Item1.ToString()))
+                Next
+
+                Await autocomplete.RespondAsync(results)
+        End Select
     End Function
 
     ' =========================================================================
@@ -500,6 +678,45 @@ Public Class CommandHandler
 
         ' Sendet die formatierte Box in den Discord-Kanal
         Await command.FollowupAsync(embed:=embedBox.Build())
+    End Function
+    Public Async Function GetResourceUsageEmbedAsync(client As DiscordSocketClient) As Task(Of EmbedBuilder)
+        ' 1. Gather Bot Metrics
+        Dim currentProcess As Process = Process.GetCurrentProcess()
+        Dim botRamUsageMB As Double = currentProcess.WorkingSet64 / (1024.0 * 1024.0)
+
+        Dim uptime As TimeSpan = DateTime.Now - currentProcess.StartTime
+        Dim uptimeString As String = $"{uptime.Days}d {uptime.Hours}h {uptime.Minutes}m {uptime.Seconds}s"
+        Dim osInfo As String = RuntimeInformation.OSDescription
+        Dim ping As Integer = client.Latency
+
+        ' 2. Gather Database Metrics Asynchronously
+        Dim dbStats As Dictionary(Of String, String) = Await OracleDatabaseManager.GetDatabaseStatsAsync()
+
+        ' 3. Build UI Layout
+        Dim embed As New EmbedBuilder() With {
+            .Title = "📊 Bot, Server & DB Resource Status",
+            .Color = Color.Green,
+            .Timestamp = DateTimeOffset.Now
+        }
+
+        embed.AddField("🤖 Bot Performance",
+                       $"**Uptime:** {uptimeString}{Environment.NewLine}" &
+                       $"**RAM Used:** {botRamUsageMB:F2} MB{Environment.NewLine}" &
+                       $"**Gateway Ping:** {ping} ms", inline:=True)
+
+        embed.AddField("🗄️ Oracle DB Stats",
+                       $"**Data Size:** {dbStats("SizeMB")}{Environment.NewLine}" &
+                       $"**Active Sessions:** {dbStats("Sessions")}{Environment.NewLine}" &
+                       $"**Free Tier Cap:** 20 GB", inline:=True)
+
+        embed.AddField("☁️ Host Environment",
+                       $"**OS:** {osInfo}{Environment.NewLine}" &
+                       $"**Arch:** {RuntimeInformation.OSArchitecture}{Environment.NewLine}" &
+                       $".NET version: {RuntimeInformation.FrameworkDescription}", inline:=False)
+
+        embed.WithFooter(footer:=New EmbedFooterBuilder().WithText("Hosted on Oracle Cloud Free Tier"))
+
+        Return embed
     End Function
 
 End Class
