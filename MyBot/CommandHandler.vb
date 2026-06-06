@@ -8,6 +8,7 @@ Imports Discord
 Imports Discord.Rest
 Imports Discord.Webhook
 Imports Discord.WebSocket
+Imports Newtonsoft.Json.Linq
 
 Public Class CommandHandler
     Private ReadOnly _client As DiscordSocketClient
@@ -411,121 +412,170 @@ Public Class CommandHandler
         End If
     End Function
 
+    ''' <summary>
+    ''' Securely broadcasts styled Discord news embeds by parsing placeholders and uploading
+    ''' local Oracle VM image assets directly into the Discord Webhook infrastructure schema.
+    ''' </summary>
     Private Async Function HandleNewsCommandAsync(command As SocketSlashCommand) As Task
         Dim gUser = TryCast(command.User, SocketGuildUser)
         If gUser IsNot Nothing AndAlso gUser.Roles.Any(Function(r) r.Name = "Server Orga") Then
 
-            ' 1. Parameter auslesen (Kanal und Dateiname)
-            Dim targetChannelOption = command.Data.Options.FirstOrDefault(Function(o) o.Name = "channel")
+            ' 1. Instantly secure the critical 3-second Discord API interaction window (ephemeral feedback)
+            Await command.DeferAsync(ephemeral:=True)
 
+            ' Extract command parameters (channel and template file selection targets)
+            Dim targetChannelOption = command.Data.Options.FirstOrDefault(Function(o) o.Name = "channel")
             Dim templateFileOption = command.Data.Options.FirstOrDefault(Function(o) o.Name = "templatefile")
 
             Dim errorMessage As String = ""
             Dim successMessage As String = ""
-            Dim isError As Boolean = False
+            Dim isCrashed As Boolean = False
+            Dim imageName As String = "avatar1.png"
+            Dim localAvatarPath As String = ""
+
             If targetChannelOption IsNot Nothing AndAlso templateFileOption IsNot Nothing Then
                 Dim targetChannel As SocketTextChannel = TryCast(targetChannelOption.Value, SocketTextChannel)
                 Dim targetFileName As String = templateFileOption.Value.ToString()
 
-                ' Dateiendung absichern
+                ' Enforce correct file extension formatting structure layout
                 If Not targetFileName.ToLower().EndsWith(".json") Then targetFileName &= ".json"
 
                 If targetChannel IsNot Nothing Then
-                    ' 2. Platzhalter für die Engine vorbereiten
-
-                    Dim avatarUrl As String = command.User.GetAvatarUrl()
-                    If String.IsNullOrEmpty(avatarUrl) Then avatarUrl = command.User.GetDefaultAvatarUrl()
-
-                    Dim placeholders As New Dictionary(Of String, String) From {
-                {"{{USERNAME}}", command.User.Username},
-                {"{{USER_AVATAR}}", avatarUrl},
-                {"{{SERVER_NAME}}", targetChannel.Guild.Name},
-                {"{{CHANNEL_NAME}}", targetChannel.Name}
-            }
-
-                    ' 3. JSON einlesen und rendern
                     Dim renderedEmbed As Embed = Nothing
+                    Dim templatePath As String = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "templates", targetFileName)
+
                     Try
+                        ' 2. Intercept and parse raw file metadata strings to extract dynamic image properties
+                        If Not File.Exists(templatePath) Then
+                            Throw New FileNotFoundException($"Template path not found on application partition storage mapping layers.")
+                        End If
+
+                        Dim rawJson As String = File.ReadAllText(templatePath)
+                        Dim jsonObject As JObject = JObject.Parse(rawJson)
+
+                        ' Read the custom unique filename key directly out of the file body layout
+                        imageName = If(jsonObject("filename")?.ToString(), "avatar1.png")
+
+                        ' Compile targeted image path tracking locations pointing inside runtime environments
+                        Dim baseDirectory As String = AppDomain.CurrentDomain.BaseDirectory
+                        localAvatarPath = Path.Combine(baseDirectory, "images", imageName)
+
+                        ' 3. Populate matching replacement variable collections
+                        ' We clear out the old placeholder mapping since the image is handled natively at the webhook layer
+                        Dim placeholders As New Dictionary(Of String, String) From {
+                        {"{{USERNAME}}", command.User.Username},
+                        {"{{USER_AVATAR}}", ""},
+                        {"{{SERVER_NAME}}", targetChannel.Guild.Name},
+                        {"{{CHANNEL_NAME}}", targetChannel.Name}
+                    }
+
+                        ' Execute compilation pipeline transformations across the custom structural configuration
                         renderedEmbed = EmbedEngine.Render(targetFileName, placeholders)
-                    Catch ex As System.IO.FileNotFoundException
-                        errorMessage = $"[Configuration Error] Template file `{targetFileName}` not found in templates folder."
-                        isError = True
+
+                    Catch ex As FileNotFoundException
+                        errorMessage = $"[Configuration Error] Template file `{targetFileName}` not located inside application storage targets."
+                        isCrashed = True
                     Catch ex As Exception
-                        errorMessage = $"[Template Error] Failed to compile JSON: {ex.Message}"
-                        isError = True
+                        errorMessage = $"[Metadata Error] Extraction tracking pipeline failed: {ex.Message}"
+                        isCrashed = True
                     End Try
 
-                    ' 4. Wenn das Render erfolgreich war, den Webhook-Prozess starten
-                    If Not isError Then
-                        ' Wir deklarieren Variablen für den Webhook-Client außerhalb, um ihn im Finally sauber zu schließen
-                        Dim webhookClient As Discord.Webhook.DiscordWebhookClient = Nothing
+                    ' 4. If metadata loading and rendering compiled cleanly, deploy downstream transport via Option 1
+                    If Not isCrashed Then
+                        Dim webhookClient As DiscordWebhookClient = Nothing
                         Dim tempWebhook As IWebhook = Nothing
+                        Dim avatarStream As FileStream = Nothing
 
                         Try
-                            ' Prüfen, ob der Bot überhaupt Berechtigungen für Webhooks im Zielkanal hat
+                            ' Scan for matching active broadcast tunnels already bound to target
                             Dim existingWebhooks = Await targetChannel.GetWebhooksAsync()
-
-                            ' Suchen, ob bereits ein vom Bot erstellter Webhook existiert
                             tempWebhook = existingWebhooks.FirstOrDefault(Function(w) w.Name = "Pak News Webhook")
 
+                            ' If no webhook exists, create it freshly while injecting the raw VM image file binary layout
+                            ' Wenn kein Webhook existiert, erstellen wir einen neuen
                             ' Wenn kein Webhook existiert, erstellen wir einen neuen
                             If tempWebhook Is Nothing Then
-                                tempWebhook = Await targetChannel.CreateWebhookAsync("Pak News Webhook")
-                            End If
+                                ' Prüfung: Existiert das Bild lokal auf der Oracle VM?
+                                If File.Exists(localAvatarPath) Then
+                                    Try
+                                        ' Öffne die lokale Bilddatei auf der VM als Stream
+                                        avatarStream = New FileStream(localAvatarPath, FileMode.Open, FileAccess.Read)
 
-                            ' Webhook-Client mit der URL initialisieren
-                            ' Webhook-Client sicher über ID und Token initialisieren
+                                        ' FIX BC30311: Übergreife den Stream DIREKT an die Methode.
+                                        ' CreateWebhookAsync erwartet nativ einen Stream für das Avatar-Bild!
+                                        tempWebhook = Await targetChannel.CreateWebhookAsync("Pak News Webhook", avatarStream)
+                                    Catch imageEx As Exception
+                                        API_COC.DebugPrint($"[Webhook Image Error] Failed to apply local VM avatar: {imageEx.Message}")
+                                        ' Fallback: Webhook ohne Bild erstellen, falls Datei beschädigt ist
+                                    End Try
+                                    If tempWebhook Is Nothing Then
+                                        tempWebhook = Await targetChannel.CreateWebhookAsync("Pak News Webhook")
+
+                                    End If
+
+                                Else
+                                        ' Fallback: Wenn Datei auf der VM fehlt
+                                        tempWebhook = Await targetChannel.CreateWebhookAsync("Pak News Webhook")
+                                End If
+                            End If
+                            ' Bind clean client processing interface engine
                             webhookClient = New DiscordWebhookClient(tempWebhook.Id, tempWebhook.Token)
 
-                            ' Das generierte Embed über den Webhook abschicken
-                            ' (Optional: Du kannst hier auch .WithUsername oder .WithAvatarUrl anpassen)
+                            ' Transmit mapped metrics elements via core endpoint channels. 
+                            ' We omit the avatarUrl parameter completely because the profile icon is natively saved inside the webhook shell.
                             Await webhookClient.SendMessageAsync(
-                        text:="",
-                        embeds:={renderedEmbed},
-                        username:="Pak Admin News System",
-                        avatarUrl:="https://discordapp.com"
-                    )
+                            text:="",
+                            embeds:={renderedEmbed},
+                            username:="Pak Admin News System"
+                        )
 
-                            successMessage = $"🚀 Successfully posted news template `{targetFileName}` into <#{targetChannel.Id}> using a secure webhook!"
+                            successMessage = $"🚀 Successfully posted news template `{targetFileName}` into <#{targetChannel.Id}> using uploaded Oracle VM avatar!"
 
                         Catch ex As Discord.Net.HttpException When ex.DiscordCode = DiscordErrorCode.InsufficientPermissions
-                            errorMessage = "[Permissions Error] The bot lacks 'Manage Webhooks' permission in the target channel."
-                            isError = True
+                            errorMessage = "[Permissions Error] Bot infrastructure missing explicit 'Manage Webhooks' privilege level."
+                            isCrashed = True
                         Catch ex As Exception
-                            errorMessage = $"[Webhook Error] Failed to broadcast message: {ex.Message}"
-                            isError = True
+                            errorMessage = $"[Transport Error] Remote webhook streaming transmission dropped: {ex.Message}"
+                            isCrashed = True
                         Finally
-                            ' Aufräumen: Wenn wir den Webhook-Client genutzt haben, Instanz freigeben
+                            ' Resource Management: Safely close active file streams and webhook clients to prevent memory leaks
+                            If avatarStream IsNot Nothing Then
+                                avatarStream.Dispose()
+                            End If
                             If webhookClient IsNot Nothing Then
                                 webhookClient.Dispose()
                             End If
-                            ' Falls du den Webhook nach jedem Post wieder restlos löschen möchtest, aktiviere diese Zeile:
-
                         End Try
+
+                        ' Clean up tracking webhooks AFTER complete payload delivery to avoid thread blocking loops
                         If tempWebhook IsNot Nothing Then
-                            Await tempWebhook.DeleteAsync()
+                            Try
+                                Await tempWebhook.DeleteAsync()
+                            Catch ex As Exception
+                                API_COC.DebugPrint($"[Webhook Clean Warning] Failed deleting infrastructure segment safely: {ex.Message}")
+                            End Try
                         End If
                     End If
                 Else
-                    errorMessage = "[Input Error] Please select a valid text channel."
-                    isError = True
+                    errorMessage = "[Input Error] Selected target channel is invalid or configuration parameters failed mapping arrays."
+                    isCrashed = True
                 End If
             Else
-                errorMessage = "[Input Error] Missing required parameters."
-                isError = True
+                errorMessage = "[Input Error] Missing critical argument configuration requirements."
+                isCrashed = True
             End If
 
-            ' 5. Finale, vom Try-Catch entkoppelte Antwort an den Administrator (ephemeral)
-            If isError Then
-                Await command.RespondAsync(errorMessage, ephemeral:=True)
+            ' Dispatch responses cleanly outside protected try-catch wrappers to avoid BC36943 exceptions
+            If isCrashed Then
+                Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = errorMessage)
             Else
-                Await command.RespondAsync(successMessage, ephemeral:=True)
+                Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = successMessage)
             End If
         Else
+            ' Fallback interaction block dropped immediately if role parameters are missing
             Await command.RespondAsync("❌ You do not have permission to use this command! Required role: **Server Orga**", ephemeral:=True)
         End If
     End Function
-
     Private Async Function HandleThreadEmbedCommandAsync(command As SocketSlashCommand) As Task
         Dim gUser = TryCast(command.User, SocketGuildUser)
         If gUser IsNot Nothing AndAlso gUser.Roles.Any(Function(r) r.Name = "Server Orga") Then
