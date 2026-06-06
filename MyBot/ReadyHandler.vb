@@ -157,6 +157,39 @@ Public Class ReadyHandler
                                      .Name = "bases",
                                      .Description = "Displays an overview of FWA base links for all TH"
                                  }
+                                 Dim whoisCommand = New SlashCommandBuilder() With {
+    .Name = "whois",
+    .Description = "Finds all Clash of Clans accounts linked to a Discord user."
+}
+
+                                 whoisCommand.AddOption(New SlashCommandOptionBuilder() With {
+    .Name = "user",
+    .Type = ApplicationCommandOptionType.String, ' Changed to String so we can pass the ID via autocomplete
+    .Description = "Type to search a Discord user...",
+    .IsRequired = True,
+    .IsAutocomplete = True
+})
+                                 Dim rosterCreateCmd = New SlashCommandBuilder() With {
+    .Name = "roaster-create",
+    .Description = "Fetches FWA members via API and creates a custom roster table."
+}
+
+
+
+                                 ' Parameter für den benutzerdefinierten Tabellennamen hinzufügen
+                                 rosterCreateCmd.AddOption("table-name", ApplicationCommandOptionType.String, "The name of the SQL table to create (e.g., roster_fwa)", isRequired:=True)
+                                 ' =========================================================================
+                                 ' NEW COMMAND: /weight-update
+                                 ' =========================================================================
+                                 Dim weightUpdateCmd = New SlashCommandBuilder() With {
+    .Name = "weight-update",
+    .Description = "Downloads live FWA weights and updates or creates the Oracle database table"
+}
+
+                                 Await guild.CreateApplicationCommandAsync(weightUpdateCmd.Build())
+                                 Await guild.CreateApplicationCommandAsync(rosterCreateCmd.Build())
+
+                                 Await guild.CreateApplicationCommandAsync(whoisCommand.Build())
 
                                  Await guild.CreateApplicationCommandAsync(basesCmd.Build())
 

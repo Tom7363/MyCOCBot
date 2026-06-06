@@ -63,6 +63,8 @@ Public Class CommandHandler
                                  Await ClanManagerCommands.HandleClanListAsync(command)
                              Case "dump"
                                  Await ClanManagerCommands.HandleDumpListAsync(command)
+                             Case "whois"
+                                 Await ClanManagerCommands.HandleWhoIsCommandAsync(command, _client)
 
                              Case "cl"
                                  Await ClanManagerCommands.HandleClCommandAsync(command)
@@ -73,6 +75,34 @@ Public Class CommandHandler
                                  Await HandleBasesCommandAsync(command)
                              Case "layout-add"
                                  Await HandleLayoutAddAsync(command)
+                             Case "roaster-create"
+                                 Await HandleRosterCreateAsync(command)
+                             Case "weight-update"
+                                 ' 1. Sichert das 3-Sekunden-Zeitfenster auf deiner Oracle Linux VM
+                                 Await command.DeferAsync()
+                                 API_COC.DebugPrint("[COMMAND] Execution triggered via /weight-update.")
+
+                                 ' 2. Nutze die Roster-Initialisierungsmethode direkt für das manuelle Update
+                                 Dim fwaJson As Newtonsoft.Json.Linq.JObject = Await OracleDatabaseManager.InitializeWeightsTableAsync()
+
+                                 ' 3. Prüfung und Antwort an den Discord-Kanal senden
+                                 If fwaJson IsNot Nothing Then
+                                     ' Optional: Wir zählen kurz, wie viele Rathaus-Stufen im JSON enthalten sind
+                                     Dim thCount As Integer = fwaJson.Count
+
+                                     Await command.ModifyOriginalResponseAsync(Sub(p)
+                                                                                   p.Content = $"✅ **WEIGHTS-Tabelle erfolgreich initialisiert!**" & Environment.NewLine &
+                                                                                               $"Die Struktur wurde in der Oracle-Datenbank geleert (TRUNCATE) und steht für neue Roster-Einträge bereit." & Environment.NewLine &
+                                                                                               $"*({thCount} FWA-Definitionen erfolgreich von fwastats.com geladen).* "
+                                                                               End Sub)
+
+                                     API_COC.DebugPrint($"[COMMAND SUCCESS] /weight-update completed. Found {thCount} TH definitions.")
+                                 Else
+                                     Await command.ModifyOriginalResponseAsync(Sub(p)
+                                                                                   p.Content = "❌ **Fehler beim Ausführen des Updates.** Die Verbindung zur Oracle-Datenbank oder zu fwastats.com ist fehlgeschlagen. Überprüfe die `coc_log.txt`."
+                                                                               End Sub)
+                                 End If
+
                              Case Else
                                  Await command.RespondAsync("❌ Unknown command.", ephemeral:=True)
                          End Select
@@ -315,6 +345,9 @@ Public Class CommandHandler
                 Next
 
                 Await autocomplete.RespondAsync(results)
+            Case "whois"
+                Await HandleWhoIsAutocompleteAsync(autocomplete)
+
         End Select
     End Function
 
@@ -782,5 +815,73 @@ Public Class CommandHandler
 
         Return embed
     End Function
+    Private Async Function HandleWhoIsAutocompleteAsync(interaction As SocketAutocompleteInteraction) As Task
+        ' Normalize user input
+        Dim userInput As String = If(interaction.Data.Current.Value?.ToString()?.ToLower()?.Trim(), "")
 
+        ' 1. Pull the unique registered users from your Oracle Autonomous DB
+        Dim allUsers As List(Of Tuple(Of String, String)) = Await OracleDatabaseManager.GetAllRegisteredUsersAsync()
+
+        ' Failure fallback
+        If allUsers Is Nothing OrElse allUsers.Count = 0 Then
+            Return
+        End If
+
+        ' 2. Ultra-tolerant filter loop
+        Dim filteredUsers = allUsers.
+            Where(Function(u)
+                      Dim dbId As String = u.Item1.ToLower()
+                      Dim originalDbName As String = u.Item2.ToLower()
+
+                      ' Convert special fonts (like 𝗧𝗼𝗺 -> tom) for matching
+                      Dim cleanDbName As String = DeUnicodeString(originalDbName).ToLower()
+
+                      ' Match against cleaned name, original name, or Discord ID
+                      Return cleanDbName.Contains(userInput) OrElse
+                             originalDbName.Contains(userInput) OrElse
+                             dbId.Contains(userInput)
+                  End Function).
+            DistinctBy(Function(u) u.Item1).
+            Take(25).
+            Select(Function(u) New AutocompleteResult($"{u.Item2} ({u.Item1})", u.Item1))
+
+        ' 3. Respond back to Discord client
+        Await interaction.RespondAsync(filteredUsers)
+    End Function
+    ''' Converts fancy mathematical fonts and surrogate-pair unicode glyphs into raw readable ASCII text.
+    ''' Crucial for Linux VMs running on Oracle OCI to match strings correctly.
+    ''' </summary>
+    Private Function DeUnicodeString(input As String) As String
+        If String.IsNullOrEmpty(input) Then Return ""
+
+        Dim sb As New System.Text.StringBuilder()
+        Dim i As Integer = 0
+
+        While i < input.Length
+            ' Check if this character is part of a 4-Byte Surrogate Pair (like mathematical bold text 𝗧𝗼𝗺)
+            If Char.IsHighSurrogate(input(i)) AndAlso (i + 1) < input.Length AndAlso Char.IsLowSurrogate(input(i + 1)) Then
+                ' Convert the two 16-bit characters into a single 32-bit UTF-32 Code Point
+                Dim codePoint As Integer = Char.ConvertToUtf32(input(i), input(i + 1))
+
+                ' 1. Check for Mathematical Bold Capital Letters (𝗧)
+                If codePoint >= &H1D5D4 AndAlso codePoint <= &H1D5ED Then
+                    sb.Append(Convert.ToChar(codePoint - &H1D5D4 + 65)) ' Map to A-Z
+                    ' 2. Check for Mathematical Bold Small Letters (𝗼, 𝗺)
+                ElseIf codePoint >= &H1D5EE AndAlso codePoint <= &H1D607 Then
+                    sb.Append(Convert.ToChar(codePoint - &H1D5EE + 97)) ' Map to a-z
+                Else
+                    ' If it's another special character, keep it as is
+                    sb.Append(input(i))
+                    sb.Append(input(i + 1))
+                End If
+                i += 2 ' Skip both surrogate characters
+            Else
+                ' Standard 2-Byte ASCII/Unicode character
+                sb.Append(input(i))
+                i += 1
+            End If
+        End While
+
+        Return sb.ToString()
+    End Function
 End Class

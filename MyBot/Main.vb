@@ -67,6 +67,23 @@ Module Main
         Await _client.StartAsync()
         Await OracleDatabaseManager.ConnectDBAsync()
         ' Keeps the application running on your Oracle Linux VM
+
+        ' =========================================================================
+        ' ORACLE CLOUD KEEP-ALIVE ENGINE (Prevents Stale Connection Timeouts)
+        ' =========================================================================
+        Dim keepAliveTask As Task = Task.Run(Async Function()
+                                                 While True
+                                                     Await Task.Delay(TimeSpan.FromMinutes(10))
+                                                     Try
+                                                         Await OracleDatabaseManager.KeepDatabaseAliveAsync()
+                                                         API_COC.DebugPrint("Database Keep-Alive: Connection active.")
+                                                     Catch ex As Exception
+                                                         API_COC.DebugPrint($"[KEEP-ALIVE WARNING] Database connection was stale, re-establishing: {ex.Message}")
+                                                     End Try
+                                                 End While
+                                             End Function)
+
+        ' Keeps the application running on your Oracle Linux VM
         Await Task.Delay(-1)
     End Function
 

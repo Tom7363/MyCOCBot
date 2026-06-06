@@ -1,7 +1,11 @@
-﻿Imports Oracle.ManagedDataAccess.Client
+﻿Imports System.Collections.Generic
 Imports System.IO
+Imports System.Net.Http
+Imports System.Text.RegularExpressions
 Imports System.Threading.Tasks
-Imports System.Collections.Generic
+Imports Newtonsoft.Json
+Imports Newtonsoft.Json.Linq
+Imports Oracle.ManagedDataAccess.Client
 
 Public Module OracleDatabaseManager
 
@@ -10,6 +14,8 @@ Public Module OracleDatabaseManager
     ''' Reads user, password, and data source from a configuration text file and opens the connection asynchronously.
     ''' </summary>
     ''' 
+
+    Private ConnectionString As String
     Public Async Function ConnectDBAsync() As Task(Of OracleConnection)
         If conn Is Nothing Then
             conn = Await GetCloudConnectionAsync()
@@ -25,6 +31,15 @@ Public Module OracleDatabaseManager
         Else
             Return False
         End If
+    End Function
+
+    Public Async Function KeepDatabaseAliveAsync() As Task
+        Dim sql As String = "SELECT 1 FROM DUAL"
+
+        Await conn.OpenAsync()
+        Using cmd As New OracleCommand(sql, conn)
+            Await cmd.ExecuteScalarAsync()
+        End Using
     End Function
     Public Async Function GetCloudConnectionAsync() As Task(Of OracleConnection)
         Try
@@ -64,7 +79,7 @@ Public Module OracleDatabaseManager
 
             ' 4. Assemble the connection string dynamically
             Dim connString As String = $"User Id={dbUser};Password={dbPassword};Data Source={dataSource};"
-
+            ConnectionString = connString
             ' 5. Open the connection asynchronously
             Dim conn As New OracleConnection(connString)
             Await conn.OpenAsync()
@@ -493,5 +508,341 @@ Public Module OracleDatabaseManager
         End Try
 
         Return recordsList
+    End Function
+
+
+    Public Async Function GetLinkedAccountsAsync(discordId As String) As Task(Of List(Of Tuple(Of String, String, String)))
+        Dim accountsList As New List(Of Tuple(Of String, String, String))()
+        Dim sql As String = "SELECT coc_tag, coc_name, verified FROM discord_users WHERE id = :discordId"
+
+        Try
+            ' FIX: Create a LOCAL connection instance for this specific task thread
+            Using conn As New OracleConnection(ConnectionString)
+
+                ' Check connection state safely using the full namespace to avoid BC30451
+                If conn.State <> System.Data.ConnectionState.Open Then
+                    Await conn.OpenAsync()
+                End If
+
+                Using cmd As New OracleCommand(sql, conn)
+                    ' Bind the parameter securely
+                    cmd.Parameters.Add(New OracleParameter("discordId", OracleDbType.Varchar2)).Value = discordId
+
+                    Using reader As OracleDataReader = CType(Await cmd.ExecuteReaderAsync(), OracleDataReader)
+                        While Await reader.ReadAsync()
+                            Dim tag As String = reader("coc_tag").ToString()
+                            Dim name As String = reader("coc_name").ToString()
+                            Dim verified As String = reader("verified").ToString()
+
+                            If String.IsNullOrEmpty(verified) Then verified = "No"
+
+                            accountsList.Add(Tuple.Create(tag, name, verified))
+                        End While
+                    End Using
+                End Using
+            End Using ' Connection is automatically closed and returned to the pool here
+        Catch ex As Exception
+            Console.WriteLine($"[DB ERROR] GetLinkedAccountsAsync failed: {ex.Message}")
+            Throw
+        End Try
+
+        Return accountsList
+    End Function
+    Public Async Function GetAllRegisteredUsersAsync() As Task(Of List(Of Tuple(Of String, String)))
+        Dim userList As New List(Of Tuple(Of String, String))()
+
+        ' SAFEST ORACLE SQL: Ranks rows per ID. 
+        ' NVL ensures that even if coc_tag is completely NULL/Empty, Oracle treats it as a valid string '#0' 
+        ' so the analytical function ROW_NUMBER never crashes or drops the user!
+        Dim sql As String = "SELECT id, final_name FROM (" &
+                         "  SELECT id, " &
+                         "         COALESCE(display_name, username) as final_name, " &
+                         "         ROW_NUMBER() OVER (PARTITION BY id ORDER BY NVL(coc_tag, '#0') DESC) as rn " &
+                         "  FROM discord_users" &
+                         ") WHERE rn = 1"
+
+        Try
+            Using conn As New OracleConnection(ConnectionString)
+                If conn.State <> System.Data.ConnectionState.Open Then
+                    Await conn.OpenAsync()
+                End If
+
+                Using cmd As New OracleCommand(sql, conn)
+                    Using reader As OracleDataReader = CType(Await cmd.ExecuteReaderAsync(), OracleDataReader)
+                        While Await reader.ReadAsync()
+                            Dim id As String = reader("id").ToString().Trim()
+                            Dim finalName As String = reader("final_name").ToString().Trim()
+
+                            If Not String.IsNullOrEmpty(id) AndAlso Not String.IsNullOrEmpty(finalName) Then
+                                userList.Add(Tuple.Create(id, finalName))
+                            End If
+                        End While
+                    End Using
+                End Using
+            End Using
+        Catch ex As Exception
+            Console.WriteLine($"[CRITICAL DB ERROR] GetAllRegisteredUsersAsync failed: {ex.Message}")
+        End Try
+
+        Return userList
+    End Function
+    Public Async Function GetIdByNameAsync(searchName As String) As Task(Of String)
+        Dim foundId As String = ""
+
+        ' FIX: We use LOWER() on both the column and the parameter to make the search 100% case-insensitive!
+        Dim sql As String = "SELECT id FROM discord_users WHERE LOWER(display_name) = :name OR LOWER(username) = :name FETCH FIRST 1 ROWS ONLY"
+
+        Try
+            Using conn As New OracleConnection(ConnectionString)
+                If conn.State <> System.Data.ConnectionState.Open Then Await conn.OpenAsync()
+                Using cmd As New OracleCommand(sql, conn)
+                    ' Bind the search parameter strictly in lowercase
+                    cmd.Parameters.Add(New OracleParameter("name", OracleDbType.Varchar2)).Value = searchName.ToLower().Trim()
+
+                    Dim result = Await cmd.ExecuteScalarAsync()
+                    If result IsNot Nothing Then foundId = result.ToString()
+                End Using
+            End Using
+        Catch ex As Exception
+            Console.WriteLine($"[DB ERROR] GetIdByNameAsync failed: {ex.Message}")
+        End Try
+        Return foundId
+    End Function
+    ''' <summary>
+    ''' Dynamically creates a roster table in Oracle. Drops the table first if it already exists.
+    ''' </summary>
+    Public Async Function CreateDynamicRosterTableAsync(tableName As String) As Task
+        ' Safe Dynamic DDL compilation
+        Dim dropSql As String = $"BEGIN EXECUTE IMMEDIATE 'DROP TABLE {tableName}'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+
+        Dim createSql As String = $"CREATE TABLE {tableName} (" &
+                                  "  player_tag VARCHAR2(15) NOT NULL, " &
+                                  "  player_name VARCHAR2(100), " &
+                                  "  th_level NUMBER(2), " &
+                                  "  weight NUMBER(6) DEFAULT 0, " &
+                                  "  discord_id NUMBER(20), " &
+                                  "  discord_name VARCHAR2(100), " &
+                                  $"  CONSTRAINT pk_{tableName} PRIMARY KEY (player_tag), " &
+                                  $"  CONSTRAINT chk_{tableName}_w CHECK (weight <= 180000)" &
+                                  ")"
+        Try
+            Using conn As New OracleConnection(ConnectionString)
+                If conn.State <> System.Data.ConnectionState.Open Then Await conn.OpenAsync()
+
+                ' Step A: Drop old table if exists (ignores ORA-00942 table-not-found error via PL/SQL block)
+                Using dropCmd As New OracleCommand(dropSql, conn)
+                    Await dropCmd.ExecuteNonQueryAsync()
+                End Using
+
+                ' Step B: Create fresh table
+                Using createCmd As New OracleCommand(createSql, conn)
+                    Await createCmd.ExecuteNonQueryAsync()
+                End Using
+            End Using
+        Catch ex As Exception
+            Console.WriteLine($"[DB DYNAMIC ERROR] Failed to create table {tableName}: {ex.Message}")
+            Throw
+        End Try
+    End Function
+
+    ''' <summary>
+    ''' Bulk inserts the completed parallel dataset into the dynamically specified table.
+    ''' </summary>
+    Public Async Function BulkInsertDynamicRosterAsync(tableName As String, playerList As List(Of Tuple(Of String, String, Integer, Integer, String, String))) As Task(Of Integer)
+        Dim rowsInserted As Integer = 0
+        ' Verkettung des validierten Tabellennamens in den Insert-String
+        Dim sql As String = $"INSERT INTO {tableName} (player_tag, player_name, th_level, weight, discord_id, discord_name) " &
+                             "VALUES (:ptag, :pname, :th, :weight, :did, :dname)"
+
+        Try
+            Using conn As New OracleConnection(ConnectionString)
+                If conn.State <> System.Data.ConnectionState.Open Then Await conn.OpenAsync()
+
+                For Each player In playerList
+                    Using cmd As New OracleCommand(sql, conn)
+                        cmd.Parameters.Add(New OracleParameter("ptag", OracleDbType.Varchar2)).Value = player.Item1
+                        cmd.Parameters.Add(New OracleParameter("pname", OracleDbType.Varchar2)).Value = player.Item2
+                        cmd.Parameters.Add(New OracleParameter("th", OracleDbType.Int32)).Value = player.Item3
+                        cmd.Parameters.Add(New OracleParameter("weight", OracleDbType.Int32)).Value = player.Item4
+
+                        If String.IsNullOrEmpty(player.Item5) Then
+                            cmd.Parameters.Add(New OracleParameter("did", OracleDbType.Int64)).Value = DBNull.Value
+                            cmd.Parameters.Add(New OracleParameter("dname", OracleDbType.Varchar2)).Value = DBNull.Value
+                        Else
+                            cmd.Parameters.Add(New OracleParameter("did", OracleDbType.Int64)).Value = Convert.ToInt64(player.Item5)
+                            cmd.Parameters.Add(New OracleParameter("dname", OracleDbType.Varchar2)).Value = player.Item6
+                        End If
+
+                        Await cmd.ExecuteNonQueryAsync()
+                        rowsInserted += 1
+                    End Using
+                Next
+
+                Using commitCmd As New OracleCommand("COMMIT", conn)
+                    Await commitCmd.ExecuteNonQueryAsync()
+                End Using
+            End Using
+        Catch ex As Exception
+            Console.WriteLine($"[DB DYNAMIC ERROR] BulkInsert failed for {tableName}: {ex.Message}")
+            Throw
+        End Try
+        Return rowsInserted
+    End Function
+    ''' <summary>
+    ''' Fetches clans filtered strictly by clan_category (e.g., FWA).
+    ''' </summary>
+    Public Async Function GetClansByCategoryAsync(category As String) As Task(Of List(Of Tuple(Of String, String, String)))
+        Dim clanList As New List(Of Tuple(Of String, String, String))()
+
+        ' FIX: Changed column name from 'category' to 'CLAN_CATEGORY'
+        Dim sql As String = "SELECT clan_tag, clan_name, clan_category FROM tracked_clans WHERE LOWER(clan_category) = :cat"
+
+        Try
+            Using conn As New OracleConnection(ConnectionString)
+                If conn.State <> System.Data.ConnectionState.Open Then Await conn.OpenAsync()
+                Using cmd As New OracleCommand(sql, conn)
+                    cmd.Parameters.Add(New OracleParameter("cat", OracleDbType.Varchar2)).Value = category.ToLower().Trim()
+                    Using reader As OracleDataReader = CType(Await cmd.ExecuteReaderAsync(), OracleDataReader)
+                        While Await reader.ReadAsync()
+                            ' Make sure to use the exact column alias 'clan_category' when reading the data
+                            clanList.Add(Tuple.Create(reader("clan_tag").ToString(), reader("clan_name").ToString(), reader("clan_category").ToString()))
+                        End While
+                    End Using
+                End Using
+            End Using
+        Catch ex As Exception
+            Console.WriteLine($"[DB ERROR] GetClansByCategoryAsync failed: {ex.Message}")
+        End Try
+        Return clanList
+    End Function
+
+    ''' <summary>
+    ''' Loads all existing player-to-discord mappings into a RAM dictionary to prevent database heavy-looping.
+    ''' </summary>
+    Public Async Function GetDiscordMappingsAsync() As Task(Of Dictionary(Of String, Tuple(Of String, String)))
+        Dim mappingDict As New Dictionary(Of String, Tuple(Of String, String))()
+        Dim sql As String = "SELECT id, COALESCE(display_name, username) as name, coc_tag FROM discord_users WHERE coc_tag IS NOT NULL AND coc_tag <> '#0'"
+
+        Try
+            Using conn As New OracleConnection(ConnectionString)
+                If conn.State <> System.Data.ConnectionState.Open Then Await conn.OpenAsync()
+                Using cmd As New OracleCommand(sql, conn)
+                    Using reader As OracleDataReader = CType(Await cmd.ExecuteReaderAsync(), OracleDataReader)
+                        While Await reader.ReadAsync()
+                            Dim tag As String = reader("coc_tag").ToString().ToUpper().Trim()
+                            Dim id As String = reader("id").ToString().Trim()
+                            Dim name As String = reader("name").ToString().Trim()
+
+                            If Not mappingDict.ContainsKey(tag) Then
+                                mappingDict.Add(tag, Tuple.Create(id, name))
+                            End If
+                        End While
+                    End Using
+                End Using
+            End Using
+        Catch ex As Exception
+            Console.WriteLine($"[DB ERROR] GetDiscordMappingsAsync failed: {ex.Message}")
+        End Try
+        Return mappingDict
+    End Function
+
+
+    Public Async Function InitializeWeightsTableAsync() As Task(Of JObject)
+        ' DIE VERIFIZIERTE URL (mit www.)
+        Const FwaWeightsUrl As String = "https://fwastats.com/Weights.json"
+
+        If conn Is Nothing OrElse conn.State <> System.Data.ConnectionState.Open Then
+            API_COC.DebugPrint("[DB ERROR] Oracle-Verbindung ist nicht offen oder steht auf 'Closed'.")
+            Return Nothing
+        End If
+
+        ' Handler für automatische Systemkomprimierung (GZip/Deflate)
+        Dim handler As New HttpClientHandler() With {
+        .AutomaticDecompression = Net.DecompressionMethods.GZip Or Net.DecompressionMethods.Deflate
+    }
+
+        Using httpClient As New HttpClient(handler)
+            httpClient.DefaultRequestHeaders.Add("Accept", "application/json")
+            httpClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+
+            Try
+                API_COC.DebugPrint("[FWA INFO] Öffne asynchronen Stream zu fwastats.com...")
+
+                ' 1. Den HTTP-Datenstrom direkt als rohen Stream anfordern (keine Strings!)
+                Using httpStream As Stream = Await httpClient.GetStreamAsync(FwaWeightsUrl)
+                    ' 2. Stream mit explizitem UTF-8 Lese-Standard öffnen
+                    Using streamReader As New StreamReader(httpStream, System.Text.Encoding.UTF8)
+
+                        ' 3. Den JsonTextReader direkt auf den Stream ansetzen (ignoriert Linux-Whitespace-Artefakte)
+                        Using jsonReader As New JsonTextReader(streamReader)
+
+                            ' 4. Direktes Laden in das JObject über den Stream-Serializer
+                            Dim weightsData As JToken = JToken.Load(jsonReader)
+                            API_COC.DebugPrint("[FWA SUCCESS] JSON erfolgreich via Stream-Pipeline de-serialisiert.")
+
+                            ' Tabelle erstellen, falls sie in Oracle noch nicht existiert
+                            Dim createTableSql As String = "
+                            DECLARE
+                                cnt NUMBER;
+                            BEGIN
+                                SELECT COUNT(*) INTO cnt FROM user_tables WHERE table_name = 'WEIGHTS';
+                                IF cnt = 0 THEN
+                                    EXECUTE IMMEDIATE 'CREATE TABLE WEIGHTS (
+                                        TAG VARCHAR2(50) PRIMARY KEY,
+                                        WEIGHT NUMBER,
+                                        TH VARCHAR2(10)
+                                    )';
+                                END IF;
+                            END;"
+
+                            Using createCmd As New OracleCommand(createTableSql, conn)
+                                Await createCmd.ExecuteNonQueryAsync()
+                            End Using
+
+                            ' Tabelle leeren (TRUNCATE) für die frischen Roster-Einträge
+                            Using truncateCmd As New OracleCommand("TRUNCATE TABLE WEIGHTS", conn)
+                                Await truncateCmd.ExecuteNonQueryAsync()
+                            End Using
+
+                            Return weightsData
+                        End Using
+                    End Using
+                End Using
+
+            Catch ex As Exception
+                API_COC.DebugPrint($"[CRITICAL ERROR] InitializeWeightsTableAsync fehlgeschlagen: {ex.Message}")
+                Return Nothing
+            End Try
+        End Using
+    End Function
+    ''' Erstellt den Eintrag neu oder aktualisiert ihn (MERGE IN).
+    ''' </summary>
+    Public Async Function SavePlayerWeightToDbAsync(playerTag As String, weight As Integer, thLevel As String) As Task
+        If conn Is Nothing OrElse conn.State <> System.Data.ConnectionState.Open Then Return
+
+        Dim formattedTag As String = playerTag.ToUpper().Trim()
+        Dim formattedTh As String = thLevel.ToUpper().Trim()
+        If Not formattedTh.StartsWith("TH") Then formattedTh = "TH" & formattedTh
+
+        ' Sicheres SQL MERGE-Statement (Upsert) für Oracle
+        Dim mergeSql As String = "
+            MERGE INTO WEIGHTS t
+            USING (SELECT :tag AS tag FROM dual) s
+            ON (t.TAG = s.tag)
+            WHEN MATCHED THEN
+                UPDATE SET t.WEIGHT = :weight, t.TH = :th
+            WHEN NOT MATCHED THEN
+                INSERT (TAG, WEIGHT, TH) VALUES (:tag, :weight, :th)"
+
+        Try
+            Using cmd As New OracleCommand(mergeSql, conn)
+                cmd.Parameters.Add(New OracleParameter("tag", formattedTag))
+                cmd.Parameters.Add(New OracleParameter("weight", weight))
+                cmd.Parameters.Add(New OracleParameter("th", formattedTh))
+                Await cmd.ExecuteNonQueryAsync()
+            End Using
+        Catch ex As Exception
+            API_COC.DebugPrint($"[DB ERROR] Failed to save player weight for {formattedTag}: {ex.Message}")
+        End Try
     End Function
 End Module

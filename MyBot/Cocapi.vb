@@ -274,7 +274,7 @@ Public Class ClashOfClansAPI
         Try
             ' Format the clan tag for the URL endpoint (the '#' must be URL-encoded as '%23')
             Dim cleanTag As String = clanTag.Trim().Replace("#", "%23")
-            Dim url As String = $"https://api.clashofclans.com/v1/clans/{cleanTag}"
+            Dim url As String = $"{BaseUrl}v1/clans/{cleanTag}"
             Console.WriteLine(_httpClient.DefaultRequestHeaders)
             Console.WriteLine(url)
             ' Send the GET request asynchronously
@@ -332,5 +332,37 @@ Public Class ClashOfClansAPI
         End Try
     End Function
 
+
+    '' <summary>
+    ''' Fetches live player profile data from the official Supercell Clash of Clans API.
+    ''' </summary>
+    Public Async Function GetPlayerDataAsync(playerTag As String) As Task(Of Newtonsoft.Json.Linq.JObject)
+        ' Ensure the player tag is correctly URL-encoded (replacing '#' with '%23')
+        Dim cleanTag As String = playerTag.ToUpper().Replace(" ", "").Replace("#", "%23")
+
+        ' The official endpoint for player profile lookups
+        Dim url As String = $"{BaseUrl}players/{cleanTag}"
+
+        Try
+            Using client As New System.Net.Http.HttpClient()
+                ' Pass your Supercell Developer Token in the Authorization Header
+                client.DefaultRequestHeaders.Authorization = New System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _apiToken)
+
+                Dim response As System.Net.Http.HttpResponseMessage = Await client.GetAsync(url)
+
+                If response.IsSuccessStatusCode Then
+                    Dim jsonString As String = Await response.Content.ReadAsStringAsync()
+                    Return Newtonsoft.Json.Linq.JObject.Parse(jsonString)
+                Else
+                    ' If player is not found (404) or token is invalid (403), return Nothing
+                    Return Nothing
+                End If
+            End Using
+        Catch ex As Exception
+            ' Log any network or parsing exceptions to your console
+            Console.WriteLine($"[API ERROR] GetPlayerDataAsync failed for {playerTag}: {ex.Message}")
+            Return Nothing
+        End Try
+    End Function
 End Class
 
