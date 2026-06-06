@@ -1,4 +1,6 @@
 ﻿Imports System.Collections.Generic
+Imports System.Data
+Imports System.Data.Common
 Imports System.IO
 Imports System.Net.Http
 Imports System.Text.RegularExpressions
@@ -620,6 +622,8 @@ Public Module OracleDatabaseManager
                                   "  player_name VARCHAR2(100), " &
                                   "  th_level NUMBER(2), " &
                                   "  weight NUMBER(6) DEFAULT 0, " &
+                                  "  clan_name VARCHAR2(100), " &
+                                  "  roster_name VARCHAR2(100), " &
                                   "  discord_id NUMBER(20), " &
                                   "  discord_name VARCHAR2(100), " &
                                   $"  CONSTRAINT pk_{tableName} PRIMARY KEY (player_tag), " &
@@ -646,47 +650,69 @@ Public Module OracleDatabaseManager
     End Function
 
     ''' <summary>
-    ''' Bulk inserts the completed parallel dataset into the dynamically specified table.
+    ''' Bulk inserts the completed parallel dataset using the strongly typed RosterPlayer class.
     ''' </summary>
-    Public Async Function BulkInsertDynamicRosterAsync(tableName As String, playerList As List(Of Tuple(Of String, String, Integer, Integer, String, String))) As Task(Of Integer)
-        Dim rowsInserted As Integer = 0
-        ' Verkettung des validierten Tabellennamens in den Insert-String
-        Dim sql As String = $"INSERT INTO {tableName} (player_tag, player_name, th_level, weight, discord_id, discord_name) " &
-                             "VALUES (:ptag, :pname, :th, :weight, :did, :dname)"
+    Public Async Function BulkInsertDynamicRosterAsync(tableName As String, playerList As List(Of RosterPlayer)) As Task(Of Integer)
+        If playerList Is Nothing OrElse playerList.Count = 0 Then Return 0
+
+        Dim totalCount As Integer = playerList.Count
+
+        Dim pTags(totalCount - 1) As String
+        Dim pNames(totalCount - 1) As String
+        Dim thLevels(totalCount - 1) As Integer
+        Dim weights(totalCount - 1) As Integer
+        Dim cNames(totalCount - 1) As String
+        Dim rNames(totalCount - 1) As String
+        Dim discordIds(totalCount - 1) As Object
+        Dim discordNames(totalCount - 1) As Object
+
+        For i As Integer = 0 To totalCount - 1
+            Dim player = playerList(i)
+            pTags(i) = player.PlayerTag
+            pNames(i) = player.PlayerName
+            thLevels(i) = player.ThLevel
+            weights(i) = player.Weight
+            cNames(i) = player.ClanName
+            rNames(i) = player.RosterName
+
+            ' FIX: Sauberer, benannter Zugriff ohne .Rest oder .Item8 Abstürze
+            If String.IsNullOrEmpty(player.DiscordId) Then
+                discordIds(i) = DBNull.Value
+                discordNames(i) = DBNull.Value
+            Else
+                discordIds(i) = Convert.ToInt64(player.DiscordId)
+                discordNames(i) = player.DiscordName
+            End If
+        Next
+
+        Dim sql As String = $"INSERT INTO {tableName} (player_tag, player_name, th_level, weight, clan_name, roster_name, discord_id, discord_name) " &
+                             "VALUES (:ptag, :pname, :th, :weight, :cname, :rname, :did, :dname)"
 
         Try
             Using conn As New OracleConnection(ConnectionString)
                 If conn.State <> System.Data.ConnectionState.Open Then Await conn.OpenAsync()
 
-                For Each player In playerList
-                    Using cmd As New OracleCommand(sql, conn)
-                        cmd.Parameters.Add(New OracleParameter("ptag", OracleDbType.Varchar2)).Value = player.Item1
-                        cmd.Parameters.Add(New OracleParameter("pname", OracleDbType.Varchar2)).Value = player.Item2
-                        cmd.Parameters.Add(New OracleParameter("th", OracleDbType.Int32)).Value = player.Item3
-                        cmd.Parameters.Add(New OracleParameter("weight", OracleDbType.Int32)).Value = player.Item4
+                Using cmd As New OracleCommand(sql, conn)
+                    cmd.ArrayBindCount = totalCount
 
-                        If String.IsNullOrEmpty(player.Item5) Then
-                            cmd.Parameters.Add(New OracleParameter("did", OracleDbType.Int64)).Value = DBNull.Value
-                            cmd.Parameters.Add(New OracleParameter("dname", OracleDbType.Varchar2)).Value = DBNull.Value
-                        Else
-                            cmd.Parameters.Add(New OracleParameter("did", OracleDbType.Int64)).Value = Convert.ToInt64(player.Item5)
-                            cmd.Parameters.Add(New OracleParameter("dname", OracleDbType.Varchar2)).Value = player.Item6
-                        End If
+                    cmd.Parameters.Add(New OracleParameter("ptag", OracleDbType.Varchar2, pTags, ParameterDirection.Input))
+                    cmd.Parameters.Add(New OracleParameter("pname", OracleDbType.Varchar2, pNames, ParameterDirection.Input))
+                    cmd.Parameters.Add(New OracleParameter("th", OracleDbType.Int32, thLevels, ParameterDirection.Input))
+                    cmd.Parameters.Add(New OracleParameter("weight", OracleDbType.Int32, weights, ParameterDirection.Input))
+                    cmd.Parameters.Add(New OracleParameter("cname", OracleDbType.Varchar2, cNames, ParameterDirection.Input))
+                    cmd.Parameters.Add(New OracleParameter("rname", OracleDbType.Varchar2, rNames, ParameterDirection.Input))
+                    cmd.Parameters.Add(New OracleParameter("did", OracleDbType.Int64, discordIds, ParameterDirection.Input))
+                    cmd.Parameters.Add(New OracleParameter("dname", OracleDbType.Varchar2, discordNames, ParameterDirection.Input))
 
-                        Await cmd.ExecuteNonQueryAsync()
-                        rowsInserted += 1
-                    End Using
-                Next
-
-                Using commitCmd As New OracleCommand("COMMIT", conn)
-                    Await commitCmd.ExecuteNonQueryAsync()
+                    Await cmd.ExecuteNonQueryAsync()
                 End Using
             End Using
+
+            Return totalCount
         Catch ex As Exception
-            Console.WriteLine($"[DB DYNAMIC ERROR] BulkInsert failed for {tableName}: {ex.Message}")
+            Console.WriteLine($"[DB DYNAMIC ERROR] BulkInsert ArrayBinding failed for {tableName}: {ex.Message}")
             Throw
         End Try
-        Return rowsInserted
     End Function
     ''' <summary>
     ''' Fetches clans filtered strictly by clan_category (e.g., FWA).
@@ -746,77 +772,50 @@ Public Module OracleDatabaseManager
         Return mappingDict
     End Function
 
-
-    Public Async Function InitializeWeightsTableAsync() As Task(Of JObject)
-        ' DIE VERIFIZIERTE URL (mit www.)
-        Const FwaWeightsUrl As String = "https://fwastats.com/Weights.json"
-
-        If conn Is Nothing OrElse conn.State <> System.Data.ConnectionState.Open Then
-            API_COC.DebugPrint("[DB ERROR] Oracle-Verbindung ist nicht offen oder steht auf 'Closed'.")
-            Return Nothing
-        End If
-
-        ' Handler für automatische Systemkomprimierung (GZip/Deflate)
-        Dim handler As New HttpClientHandler() With {
-        .AutomaticDecompression = Net.DecompressionMethods.GZip Or Net.DecompressionMethods.Deflate
-    }
-
-        Using httpClient As New HttpClient(handler)
-            httpClient.DefaultRequestHeaders.Add("Accept", "application/json")
-            httpClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-
+    ''' <summary>
+    ''' <summary>
+    ''' Recreates the WEIGHTS table asynchronously by dropping it if it exists, then creating it fresh.
+    ''' </summary>
+    Public Async Function RecreateWeightsTableAsync() As Task
+        Using conn As New OracleConnection(ConnectionString)
             Try
-                API_COC.DebugPrint("[FWA INFO] Öffne asynchronen Stream zu fwastats.com...")
+                ' Open the connection asynchronously
+                Await conn.OpenAsync()
+                API_COC.DebugPrint("[DB INFO] Rebuilding relational table structure for WEIGHTS asynchronously...")
 
-                ' 1. Den HTTP-Datenstrom direkt als rohen Stream anfordern (keine Strings!)
-                Using httpStream As Stream = Await httpClient.GetStreamAsync(FwaWeightsUrl)
-                    ' 2. Stream mit explizitem UTF-8 Lese-Standard öffnen
-                    Using streamReader As New StreamReader(httpStream, System.Text.Encoding.UTF8)
+                ' PL/SQL block to drop and recreate the weights table cleanly
+                Dim dropAndCreateQuery As String = "
+                    BEGIN
+                        -- 1. Drop table WEIGHTS if it exists
+                        BEGIN
+                            EXECUTE IMMEDIATE 'DROP TABLE weights PURGE';
+                        EXCEPTION
+                            WHEN OTHERS THEN
+                                IF SQLCODE != -942 THEN RAISE; END IF; -- -942 means table does not exist
+                        END;
 
-                        ' 3. Den JsonTextReader direkt auf den Stream ansetzen (ignoriert Linux-Whitespace-Artefakte)
-                        Using jsonReader As New JsonTextReader(streamReader)
+                        -- 2. Create table matching the FwaRecord properties
+                        EXECUTE IMMEDIATE 'CREATE TABLE weights (
+                            tag VARCHAR2(20) PRIMARY KEY,
+                            weight NUMBER,
+                            townhall NUMBER,
+                            last_modified VARCHAR2(50),
+                            fetched_at TIMESTAMP DEFAULT SYSDATE
+                        )';
+                    END;"
 
-                            ' 4. Direktes Laden in das JObject über den Stream-Serializer
-                            Dim weightsData As JToken = JToken.Load(jsonReader)
-                            API_COC.DebugPrint("[FWA SUCCESS] JSON erfolgreich via Stream-Pipeline de-serialisiert.")
-
-                            ' Tabelle erstellen, falls sie in Oracle noch nicht existiert
-                            Dim createTableSql As String = "
-                            DECLARE
-                                cnt NUMBER;
-                            BEGIN
-                                SELECT COUNT(*) INTO cnt FROM user_tables WHERE table_name = 'WEIGHTS';
-                                IF cnt = 0 THEN
-                                    EXECUTE IMMEDIATE 'CREATE TABLE WEIGHTS (
-                                        TAG VARCHAR2(50) PRIMARY KEY,
-                                        WEIGHT NUMBER,
-                                        TH VARCHAR2(10)
-                                    )';
-                                END IF;
-                            END;"
-
-                            Using createCmd As New OracleCommand(createTableSql, conn)
-                                Await createCmd.ExecuteNonQueryAsync()
-                            End Using
-
-                            ' Tabelle leeren (TRUNCATE) für die frischen Roster-Einträge
-                            Using truncateCmd As New OracleCommand("TRUNCATE TABLE WEIGHTS", conn)
-                                Await truncateCmd.ExecuteNonQueryAsync()
-                            End Using
-
-                            Return weightsData
-                        End Using
-                    End Using
+                Using cmd As New OracleCommand(dropAndCreateQuery, conn)
+                    ' Execute the structural query asynchronously
+                    Await cmd.ExecuteNonQueryAsync()
+                    API_COC.DebugPrint("[DB SUCCESS] Table 'WEIGHTS' successfully recreated asynchronously.")
                 End Using
 
             Catch ex As Exception
-                API_COC.DebugPrint($"[CRITICAL ERROR] InitializeWeightsTableAsync fehlgeschlagen: {ex.Message}")
-                Return Nothing
+                API_COC.DebugPrint("[DB ERROR] RecreateWeightsTableAsync failed: " & ex.Message)
+                Throw
             End Try
         End Using
-    End Function
-    ''' Erstellt den Eintrag neu oder aktualisiert ihn (MERGE IN).
-    ''' </summary>
+    End Function    ''' </summary>
     Public Async Function SavePlayerWeightToDbAsync(playerTag As String, weight As Integer, thLevel As String) As Task
         If conn Is Nothing OrElse conn.State <> System.Data.ConnectionState.Open Then Return
 
@@ -845,4 +844,163 @@ Public Module OracleDatabaseManager
             API_COC.DebugPrint($"[DB ERROR] Failed to save player weight for {formattedTag}: {ex.Message}")
         End Try
     End Function
+
+    ''' <summary>
+    ''' Saves a list of FwaRecord structures efficiently using Oracle Array Binding (Bulk Insert) asynchronously.
+    ''' </summary>
+    Public Async Function SaveFwaDataAsync(records As List(Of FwaRecord)) As Task
+        If records Is Nothing OrElse records.Count = 0 Then Return
+
+        Using conn As New OracleConnection(ConnectionString)
+            Try
+                Await conn.OpenAsync()
+
+                ' 1. Clear old data from the table asynchronously
+                Using truncateCmd As New OracleCommand("TRUNCATE TABLE weights", conn)
+                    Await truncateCmd.ExecuteNonQueryAsync()
+                End Using
+
+                ' 2. Prepare arrays for Bulk Insertion
+                Dim count As Integer = records.Count
+                Dim tags(count - 1) As String
+                Dim weights(count - 1) As Integer
+                Dim townhalls(count - 1) As Integer
+                Dim lastModifieds(count - 1) As String
+
+                For i As Integer = 0 To count - 1
+                    tags(i) = records(i).Tag
+                    weights(i) = records(i).Weight
+                    townhalls(i) = records(i).Townhall
+                    lastModifieds(i) = records(i).LastModified
+                Next
+
+                ' 3. Execute bulk insert statement
+                Dim insertQuery As String = "INSERT INTO weights (tag, weight, townhall, last_modified) VALUES (:tag, :weight, :townhall, :last_modified)"
+
+                Using insertCmd As New OracleCommand(insertQuery, conn)
+                    ' Enable Oracle Array Binding
+                    insertCmd.ArrayBindCount = count
+
+                    ' Bind compiled arrays directly to parameters
+                    insertCmd.Parameters.Add(New OracleParameter("tag", OracleDbType.Varchar2, tags, ParameterDirection.Input))
+                    insertCmd.Parameters.Add(New OracleParameter("weight", OracleDbType.Int32, weights, ParameterDirection.Input))
+                    insertCmd.Parameters.Add(New OracleParameter("townhall", OracleDbType.Int32, townhalls, ParameterDirection.Input))
+                    insertCmd.Parameters.Add(New OracleParameter("last_modified", OracleDbType.Varchar2, lastModifieds, ParameterDirection.Input))
+
+                    ' Execute bulk insert asynchronously
+                    Await insertCmd.ExecuteNonQueryAsync()
+                    API_COC.DebugPrint($"[DB SUCCESS] Successfully bulk-inserted {count} records into WEIGHTS asynchronously.")
+                End Using
+
+            Catch ex As Exception
+                API_COC.DebugPrint("[DB ERROR] SaveFwaDataAsync bulk insert failed: " & ex.Message)
+            End Try
+        End Using
+    End Function
+    ''' <summary>
+    ''' Queries a specific player/clan tag instantly and asynchronously from the relational column structure.
+    ''' </summary>
+    Public Async Function GetWeightByTagAsync(searchTag As String) As Task(Of FwaRecord)
+        Dim normalizedTag As String = searchTag.Trim().ToUpper()
+        Dim result As FwaRecord = Nothing
+
+        Using conn As New OracleConnection(ConnectionString)
+            Try
+                Await conn.OpenAsync()
+                Dim selectQuery As String = "SELECT tag, weight, townhall, last_modified FROM weights WHERE UPPER(tag) = :tagValue"
+
+                Using cmd As New OracleCommand(selectQuery, conn)
+                    cmd.Parameters.Add(New OracleParameter("tagValue", OracleDbType.Varchar2)).Value = normalizedTag
+
+                    ' Use ExecuteReaderAsync for non-blocking database reads
+                    Using reader As DbDataReader = Await cmd.ExecuteReaderAsync()
+                        If Await reader.ReadAsync() Then
+                            result = New FwaRecord() With {
+                                .Tag = reader("tag").ToString(),
+                                .Weight = Convert.ToInt32(reader("weight")),
+                                .Townhall = Convert.ToInt32(reader("townhall")),
+                                .LastModified = reader("last_modified").ToString()
+                            }
+                        End If
+                    End Using
+                End Using
+            Catch ex As Exception
+                API_COC.DebugPrint("[DB ERROR] GetWeightByTagAsync query failed: " & ex.Message)
+            End Try
+        End Using
+        Return result
+    End Function
+    ''' <summary>
+    ''' Fetches the current FWA player weights safely and maps them directly to a typed list.
+    ''' </summary>
+    Public Async Function GetPlayerWeightsFromWeb() As Task(Of List(Of FwaRecord))
+        Const FwaWeightsUrl As String = "https://fwastats.com/Weights.json"
+        Dim fallbackList As New List(Of FwaRecord)()
+
+        Dim handler As New HttpClientHandler() With {
+            .AutomaticDecompression = Net.DecompressionMethods.GZip Or Net.DecompressionMethods.Deflate
+        }
+
+        Using httpClient As New HttpClient(handler)
+            httpClient.DefaultRequestHeaders.Clear()
+            httpClient.DefaultRequestHeaders.Add("Accept", "application/json")
+            httpClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+
+            Try
+                API_COC.DebugPrint("[FWA INFO] Requesting response headers from fwastats.com...")
+
+                Using response As HttpResponseMessage = Await httpClient.GetAsync(FwaWeightsUrl, HttpCompletionOption.ResponseHeadersRead)
+                    ' Ensure we got a HTTP 200 OK before processing the stream
+                    response.EnsureSuccessStatusCode()
+
+                    Using httpStream As Stream = Await response.Content.ReadAsStreamAsync()
+                        Using streamReader As New StreamReader(httpStream, System.Text.Encoding.UTF8)
+                            Using jsonReader As New JsonTextReader(streamReader)
+
+                                ' FIX: Do NOT call jsonReader.Read() here! 
+                                ' Let the serializer handle the stream from position 0.
+                                Dim serializer As New JsonSerializer()
+
+                                ' Direct stream deserialization without consuming tokens beforehand
+                                Dim records As List(Of FwaRecord) = serializer.Deserialize(Of List(Of FwaRecord))(jsonReader)
+
+                                If records Is Nothing Then records = fallbackList
+                                API_COC.DebugPrint($"[FWA SUCCESS] Loaded {records.Count} records cleanly via safe VM-pipeline.")
+                                Return records
+
+                            End Using
+                        End Using
+                    End Using
+                End Using
+
+            Catch ex As Exception
+                API_COC.DebugPrint($"[CRITICAL ERROR] GetPlayerWeightsFromWeb pipeline failed: {ex.Message}")
+                Return fallbackList
+            End Try
+        End Using
+    End Function
+    Public Class FwaRecord
+        <JsonProperty("tag")>
+        Public Property Tag As String
+
+        <JsonProperty("weight")>
+        Public Property Weight As Integer
+
+        <JsonProperty("townhall")>
+        Public Property Townhall As Integer
+
+        <JsonProperty("lastModified")>
+        Public Property LastModified As String
+    End Class
+    Public Class RosterPlayer
+        Public Property PlayerTag As String
+        Public Property PlayerName As String
+        Public Property ThLevel As Integer
+        Public Property Weight As Integer
+        Public Property ClanName As String
+        Public Property RosterName As String
+        Public Property DiscordId As String
+        Public Property DiscordName As String
+    End Class
+
 End Module

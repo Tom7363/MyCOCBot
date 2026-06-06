@@ -80,6 +80,12 @@ Public Class API_COC
     Private Class KeyId
         Public Property id As String
     End Class
+    Private Class CreateKeyResponse
+        Public Property status As Status
+        Public Property sessionExpiresInSeconds As Integer
+        Public Property key As KeyList ' Einzelnes Key-Objekt ohne "s"!
+    End Class
+
 #End Region
 
     ''' <summary>
@@ -213,12 +219,16 @@ Public Class API_COC
                     Dim createResult As String = Await PostJsonAsync("https://developer.clashofclans.com/api/apikey/create", JsonConvert.SerializeObject(new_key, Formatting.None))
 
                     ' Fresh token extraction out of the creation payload response
-                    Dim keyData = JsonConvert.DeserializeObject(Of Keyinfo)(createResult)
-                    Console.WriteLine(keyData?.keys?.Length)
-                    If keyData?.keys?.Length > 0 Then
-                        CocService.apiToken = keyData.keys(0).key
-                        Console.WriteLine(keyData.keys(0).key)
+                    Dim createdKeyInfo As CreateKeyResponse = JsonConvert.DeserializeObject(Of CreateKeyResponse)(createResult)
+                    ' Extrahiere den Token direkt aus dem "key"-Feld (ohne Array-Index)
+                    If createdKeyInfo IsNot Nothing AndAlso createdKeyInfo.key IsNot Nothing Then
+                        CocService.apiToken = createdKeyInfo.key.key
+                        DebugPrint("Successfully bound fresh newly generated token to CocService.apiToken.")
+                        Return True
+                    Else
+                        DebugPrint("[ERROR] Failed to parse the newly created key from Supercell response.")
                     End If
+
                 End If
 
                 If key.name = "MyAppKey" Then
@@ -274,7 +284,7 @@ Public Class ClashOfClansAPI
         Try
             ' Format the clan tag for the URL endpoint (the '#' must be URL-encoded as '%23')
             Dim cleanTag As String = clanTag.Trim().Replace("#", "%23")
-            Dim url As String = $"{BaseUrl}v1/clans/{cleanTag}"
+            Dim url As String = $"{BaseUrl}clans/{cleanTag}"
             Console.WriteLine(_httpClient.DefaultRequestHeaders)
             Console.WriteLine(url)
             ' Send the GET request asynchronously

@@ -78,30 +78,7 @@ Public Class CommandHandler
                              Case "roaster-create"
                                  Await HandleRosterCreateAsync(command)
                              Case "weight-update"
-                                 ' 1. Sichert das 3-Sekunden-Zeitfenster auf deiner Oracle Linux VM
-                                 Await command.DeferAsync()
-                                 API_COC.DebugPrint("[COMMAND] Execution triggered via /weight-update.")
-
-                                 ' 2. Nutze die Roster-Initialisierungsmethode direkt für das manuelle Update
-                                 Dim fwaJson As Newtonsoft.Json.Linq.JObject = Await OracleDatabaseManager.InitializeWeightsTableAsync()
-
-                                 ' 3. Prüfung und Antwort an den Discord-Kanal senden
-                                 If fwaJson IsNot Nothing Then
-                                     ' Optional: Wir zählen kurz, wie viele Rathaus-Stufen im JSON enthalten sind
-                                     Dim thCount As Integer = fwaJson.Count
-
-                                     Await command.ModifyOriginalResponseAsync(Sub(p)
-                                                                                   p.Content = $"✅ **WEIGHTS-Tabelle erfolgreich initialisiert!**" & Environment.NewLine &
-                                                                                               $"Die Struktur wurde in der Oracle-Datenbank geleert (TRUNCATE) und steht für neue Roster-Einträge bereit." & Environment.NewLine &
-                                                                                               $"*({thCount} FWA-Definitionen erfolgreich von fwastats.com geladen).* "
-                                                                               End Sub)
-
-                                     API_COC.DebugPrint($"[COMMAND SUCCESS] /weight-update completed. Found {thCount} TH definitions.")
-                                 Else
-                                     Await command.ModifyOriginalResponseAsync(Sub(p)
-                                                                                   p.Content = "❌ **Fehler beim Ausführen des Updates.** Die Verbindung zur Oracle-Datenbank oder zu fwastats.com ist fehlgeschlagen. Überprüfe die `coc_log.txt`."
-                                                                               End Sub)
-                                 End If
+                                 Await HandleWeigthUpdateAsync(command)
 
                              Case Else
                                  Await command.RespondAsync("❌ Unknown command.", ephemeral:=True)
@@ -359,7 +336,7 @@ Public Class CommandHandler
         ' -----------------------------------------------------------------
         ' COMMAND: /ping
         ' -----------------------------------------------------------------
-        Const Version As String = "01.00.00 D"
+        Const Version As String = "01.00.00 E"
         Dim latency As Integer = _client.Latency
         Dim osDescription As String = System.Runtime.InteropServices.RuntimeInformation.OSDescription
 

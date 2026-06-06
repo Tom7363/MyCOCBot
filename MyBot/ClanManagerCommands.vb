@@ -4,6 +4,7 @@ Imports System.Text
 Imports System.Threading.Tasks
 Imports Discord
 Imports Discord.WebSocket
+Imports MyCocBot.CocModels
 Imports Newtonsoft.Json.Linq
 Imports Oracle.ManagedDataAccess.Client
 
@@ -455,68 +456,204 @@ Public Module ClanManagerCommands
     ''' <summary>
     ''' Fetches all members of FWA clans and dynamically creates a custom-named table.
     ''' </summary>
+    ''' <summary>
+    ''' Fetches all members of FWA clans and dynamically creates a custom-named table.
+    ''' Activated via Discord SocketSlashCommand interface interaction.
+    ''' </summary>
     Public Async Function HandleRosterCreateAsync(command As SocketSlashCommand) As Task
-        ' 1. Sichert das 3-Sekunden-Zeitfenster bei Discord
+        ' 1. Acknowledge and secure the critical 3-second Discord API interaction window
         Await command.DeferAsync()
-        API_COC.DebugPrint("[ROSTER] Execution triggered via /roster-create.")
 
-        ' 2. WEIGHTS-Tabelle vorbereiten und FWA-Basis-Gewichte in den RAM laden
-        Dim fwaJson As JObject = Await OracleDatabaseManager.InitializeWeightsTableAsync()
-
-        If fwaJson Is Nothing Then
-            Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = "❌ Failed to connect to the database or download FWA Stats.")
+        ' 2. Safely extract the raw string parameter entered by the user
+        Dim tableNameOption = command.Data.Options.FirstOrDefault(Function(o) o.Name = "table-name")
+        If tableNameOption Is Nothing OrElse tableNameOption.Value Is Nothing Then
+            Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = "❌ **Error:** Missing required parameter `tablename`.")
             Return
         End If
 
-        ' --- DEINE EXISTIERENDE CLAN/SPIELER LOGIK ---
-        ' Hier liest du die Spieler-Daten aus (z.B. über ein Clan-Tag aus deinen Slash-Command-Optionen oder der DB)
-        ' Nehmen wir an, wir holen uns eine Liste von Spielern aus deiner Clash of Clans API Schnittstelle:
+        ' 3. Sanitize input to conform to strict Oracle Database naming rules
+        Dim rawTableName As String = tableNameOption.Value.ToString()
+        Dim sanitizedTableName As String = rawTableName.Replace("#", "").Replace(" ", "_").Trim().ToUpper()
 
-        ' BEISPIEL-DATEN (Ersetze dies durch deine echte Schleife deiner CoC API-Klassen):
-        Dim samplePlayers As New Dictionary(Of String, String) From {
-            {"#Y9V2YV2", "16"},
-            {"#2G2Y8YL", "15"},
-            {"#P8RR92V", "14"}
-        }
+        If String.IsNullOrEmpty(sanitizedTableName) OrElse sanitizedTableName.Length > 30 Then
+            Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = "❌ **Error:** Invalid table name. Use alphanumeric characters only (max 30).")
+            Return
+        End If
 
-        Dim playersProcessed As Integer = 0
+        ' 4. Send initial pipeline progress update tracking state
+        Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = $"⏳ **Step 1/4:** Recreating dynamic table `{sanitizedTableName}` on Oracle Cloud...")
 
-        ' Schleife durch alle Spieler des zu erstellenden Rosters
-        For Each player In samplePlayers
-            Dim playerTag As String = player.Key      ' z.B. "#Y9V2YV2"
-            Dim townHall As String = player.Value     ' z.B. "16"
-            Dim jsonKey As String = "TH" & townHall   ' Erzeugt "TH16"
+        ' Variables to handle conditional error routing outside the Catch block scope
+        Dim isCrashed As Boolean = False
+        Dim errorMessage As String = ""
 
-            ' Gewicht aus den geladenen FWA Stats herausfiltern
-            Dim calculatedWeight As Integer = 0
-            Dim thDetails = fwaJson(jsonKey)
+        Try
+            ' =========================================================================
+            ' STEP A: Recreate the Target Table
+            ' =========================================================================
+            Await CreateDynamicRosterTableAsync(sanitizedTableName)
+            Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = "⏳ **Step 2/4:** Table created. Loading Discord user mapping dictionary into memory...")
 
-            If thDetails IsNot Nothing Then
-                If thDetails.HasValues Then
-                    ' Falls Min/Max-Struktur existiert, nutzen wir das maximale Richtgewicht
-                    calculatedWeight = If(thDetails("Max")?.Value(Of Integer)(), If(thDetails("max")?.Value(Of Integer)(), 0))
-                Else
-                    calculatedWeight = thDetails.Value(Of Integer)()
-                End If
+            ' =========================================================================
+            ' STEP B: Load Performance Mappings from Database Cache
+            ' =========================================================================
+            Dim discordMappings As Dictionary(Of String, Tuple(Of String, String)) = Await GetDiscordMappingsAsync()
+            Dim fwaClans As List(Of Tuple(Of String, String, String)) = Await GetClansByCategoryAsync("FWA")
+
+            If fwaClans.Count = 0 Then
+                Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = "❌ **Pipeline Aborted:** No clans categorized as 'FWA' were found in `tracked_clans` table.")
+                Return
             End If
 
-            ' 3. SPIELER-EINTRAG IN DER DB SPEICHERN
-            ' Füllt das Feld WEIGHT basierend auf dem referenzierten Player-Tag
-            Await OracleDatabaseManager.SavePlayerWeightToDbAsync(playerTag, calculatedWeight, jsonKey)
-            playersProcessed += 1
-        Next
+            Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = $"⏳ **Step 3/4:** Found {fwaClans.Count} FWA clans. Fetching live player rosters via Cocapi...")
+            ' =========================================================================
+            ' STEP C: Query Roster Data with Clan Name & Roster Name via Clash of Clans Web API
+            ' =========================================================================
+            ' FIX: Nutzt jetzt die saubere Objektklasse statt des fehlerhaften Tuples
+            Dim finalRosterList As New List(Of RosterPlayer)()
 
-        API_COC.DebugPrint($"[ROSTER SUCCESS] Maintained {playersProcessed} player weight records.")
+            Dim cocApiClient As New ClashOfClansAPI(CocService.apiToken)
 
-        ' 4. Rich Embed Antwort an den Discord-Kanal senden
-        Dim embed As New EmbedBuilder() With {
-            .Title = "FWA Roster-Gewichte aktualisiert",
-            .Description = $"Die Tabelle **WEIGHTS** wurde erfolgreich aktualisiert und mit den individuellen Spieler-Gewichten befüllt.",
-            .Color = Color.Green
-        }
-        embed.AddField("Verarbeitete Accounts", playersProcessed.ToString(), True)
-        embed.WithFooter("Datenbasis: fwastats.com", "https://fwastats.com")
+            For Each clan In fwaClans
+                Dim clanTag As String = clan.Item1
+                Dim clanJson As Newtonsoft.Json.Linq.JObject = Await cocApiClient.GetClanDataAsync(clanTag)
 
-        Await command.ModifyOriginalResponseAsync(Sub(p) p.Embed = embed.Build())
+                If clanJson IsNot Nothing AndAlso clanJson("memberList") IsNot Nothing Then
+                    Dim currentClanName As String = If(clanJson("name")?.ToString(), "Unknown Clan")
+                    Dim memberListArray As Newtonsoft.Json.Linq.JArray = CType(clanJson("memberList"), Newtonsoft.Json.Linq.JArray)
+
+                    For Each member In memberListArray
+                        Dim rawPlayerTag As String = member("tag")?.ToString()
+                        If String.IsNullOrEmpty(rawPlayerTag) Then Continue For
+
+                        Dim normalizedPlayerTag As String = rawPlayerTag.ToUpper().Trim()
+
+                        Dim weightRecord = Await GetWeightByTagAsync(normalizedPlayerTag)
+                        Dim resolvedWeight As Integer = If(weightRecord IsNot Nothing, weightRecord.Weight, 0)
+
+                        Dim discordId As String = ""
+                        Dim discordName As String = ""
+                        If discordMappings.ContainsKey(normalizedPlayerTag) Then
+                            discordId = discordMappings(normalizedPlayerTag).Item1
+                            discordName = discordMappings(normalizedPlayerTag).Item2
+                        End If
+
+                        ' Befülle das Objekt mit sprechenden Namen
+                        Dim newPlayer As New RosterPlayer() With {
+                            .PlayerTag = normalizedPlayerTag,
+                            .PlayerName = If(member("name")?.ToString(), ""),
+                            .ThLevel = If(member("townHallLevel") IsNot Nothing, Convert.ToInt32(member("townHallLevel")), 0),
+                            .Weight = resolvedWeight,
+                            .ClanName = currentClanName,
+                            .RosterName = " ",
+                            .DiscordId = discordId,
+                            .DiscordName = discordName
+                        }
+
+                        finalRosterList.Add(newPlayer)
+                    Next
+                End If
+            Next
+
+            If finalRosterList.Count = 0 Then
+                Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = "❌ **Pipeline Aborted:** Successfully scanned clans, but retrieved zero active players.")
+                Return
+            End If
+
+            Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = $"⏳ **Step 4/4:** Scraping finished. Bulk uploading {finalRosterList.Count} players directly to Oracle AI Database...")
+
+            ' =========================================================================
+            ' STEP D: Perform Single-Roundtrip High-Speed Bulk Insertion
+            ' =========================================================================
+            Dim savedRowsCount As Integer = Await BulkInsertDynamicRosterAsync(sanitizedTableName, finalRosterList)
+
+            ' Build a professional embed response summary payload report card
+            Dim successSummary As String = $"✅ **Roster Pipeline Complete!**" & vbCrLf &
+                                           $"📋 Table Target: `{sanitizedTableName}`" & vbCrLf &
+                                           $"🛡️ Scanned FWA Clans: `{fwaClans.Count}`" & vbCrLf &
+                                           $"👥 Total Players Saved: `{savedRowsCount}`"
+
+            Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = successSummary)
+            API_COC.DebugPrint($"[PIPELINE SUCCESS] Executed roster compilation into table {sanitizedTableName}.")
+            Return
+
+        Catch ex As Exception
+            ' Safe execution boundary fallback layout parsing 
+            API_COC.DebugPrint($"[PIPELINE CRITICAL] Failure compiling roster for {sanitizedTableName}: {ex.Message}")
+            ' FIX: Extract metrics inside Catch block without performing Await operations
+            isCrashed = True
+            errorMessage = ex.Message
+        End Try
+        ' FIX: Dispatch the asynchronous Discord alert down here, safely outside of the Catch wrapper block
+        If isCrashed Then
+            Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = $"❌ **Pipeline Execution Crashed!** " & vbCrLf & $"`{errorMessage}`")
+        End If
+
     End Function
+
+    ''' <summary>
+    ''' Fetches all members of FWA clans and dynamically creates a custom-named table.
+    ''' </summary>
+    Public Async Function HandleWeigthUpdateAsync(command As SocketSlashCommand) As Task
+        ' FIX 1: Instantly acknowledge the interaction to secure a 15-minute processing window
+        Await command.DeferAsync()
+
+        ' Track crash states safely outside the catch block scope
+        Dim isCrashed As Boolean = False
+        Dim errorText As String = ""
+
+        Try
+            ' Push the initial visual update using the tokenized interaction hook
+            Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = "⏳ **Step 1/3:** Dropping and recreating relational `WEIGHTS` schema...")
+
+            ' 1. Recreate table structure
+            Await RecreateWeightsTableAsync()
+            Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = "⏳ **Step 2/3:** Structural reset complete. Opening streaming pipeline to fwastats.com...")
+
+            ' 2. Stream dataset over network
+            Dim freshRecords As List(Of FwaRecord) = Await GetPlayerWeightsFromWeb()
+
+            If freshRecords IsNot Nothing AndAlso freshRecords.Count > 0 Then
+                Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = $"⏳ **Step 3/3:** Successfully decoded {freshRecords.Count} entries. Performing Oracle Bulk-Insert...")
+
+                ' 3. Bulk insert into Oracle AI Database
+                Await SaveFwaDataAsync(freshRecords)
+
+                ' Final Success Receipt Output
+                Dim finalSummary As String = $"✅ **Weight Update Complete!**" & vbCrLf &
+                                             $"📋 Relational Destination Table: `WEIGHTS`" & vbCrLf &
+                                             $"👥 Total Cached Elements: `{freshRecords.Count}`"
+
+                ' FIX 2: Modify the original token response instead of calling a new separate channel print action
+                Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = finalSummary)
+                API_COC.DebugPrint("[COMMAND SUCCESS] /weight-update completed execution cycle successfully.")
+            Else
+                Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = "❌ **Pipeline Failed:** Zero data records fetched over the network channel.")
+            End If
+
+        Catch ex As Exception
+            isCrashed = True
+            errorText = ex.Message
+            API_COC.DebugPrint("[COMMAND EXCEPTION] Runtime failure during execution: " & errorText)
+        End Try
+
+        ' Safe post-exception routing block bypassing structural compiler rules
+        If isCrashed Then
+            Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = $"❌ **Critical Error:** Update routine crashed!" & vbCrLf & $"`{errorText}`")
+        End If
+
+        ' 1. Sichert das 3-Sekunden-Zeitfenster auf deiner Oracle Linux VM
+        Await command.DeferAsync()
+        API_COC.DebugPrint("[COMMAND] Execution triggered via /weight-update.")
+
+        ' 2. Nutze die Roster-Initialisierungsmethode direkt für das manuelle Update
+        Await OracleDatabaseManager.RecreateWeightsTableAsync()
+        Await SaveFwaDataAsync(Await GetPlayerWeightsFromWeb())
+        ' 3. Prüfung und Antwort an den Discord-Kanal senden
+
+        API_COC.DebugPrint($"[COMMAND SUCCESS] /weight-update completed.")
+        Await command.RespondAsync($"[COMMAND SUCCESS] /weight-update completed.", ephemeral:=True)
+
+    End Function
+
 End Module
