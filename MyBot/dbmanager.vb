@@ -35,13 +35,49 @@ Public Module OracleDatabaseManager
         End If
     End Function
 
+    ' English Code Comments
+    ''' <summary>
+    ''' Validates the Oracle Cloud connection pool and force-recovers the state if dropped by the OCI firewall.
+    ''' </summary>
     Public Async Function KeepDatabaseAliveAsync() As Task
         Dim sql As String = "SELECT 1 FROM DUAL"
 
-        Await conn.OpenAsync()
-        Using cmd As New OracleCommand(sql, conn)
-            Await cmd.ExecuteScalarAsync()
-        End Using
+        Try
+            ' 1. Check if the connection state parameter is broken or closed
+            If conn Is Nothing Then
+                API_COC.DebugPrint("[KEEP-ALIVE] Connection object is null. Initializing reconstruction...")
+                Await ConnectDBAsync()
+                Return
+            End If
+
+            ' 2. If the connection is open, test if it's actually alive (Not stale)
+            If conn.State = ConnectionState.Open Then
+                Try
+                    Using cmd As New OracleCommand(sql, conn)
+                        Await cmd.ExecuteScalarAsync()
+                    End Using
+                    ' Connection is perfectly healthy, exit the execution frame safely
+                    Return
+                Catch testEx As Exception
+                    API_COC.DebugPrint($"[KEEP-ALIVE WARNING] Open connection is stale or dropped by firewall: {testEx.Message}. Forcing close...")
+                    ' Force a clean close to flush the broken socket allocation from the pipeline
+                    Try : conn.Close() : Catch : End Try
+                End Try
+            End If
+
+            ' 3. Re-open or establish the connection cleanly
+            API_COC.DebugPrint("[KEEP-ALIVE] Opening/Reviving database connection pipeline...")
+            Await conn.OpenAsync()
+
+            ' Verify the fresh pipeline with the dummy transaction
+            Using cmd As New OracleCommand(sql, conn)
+                Await cmd.ExecuteScalarAsync()
+            End Using
+
+        Catch ex As Exception
+            ' Push the error upstream into your Main logging module loop
+            Throw New Exception($"Database recovery failed during keep-alive sequence: {ex.Message}", ex)
+        End Try
     End Function
     Public Async Function GetCloudConnectionAsync() As Task(Of OracleConnection)
         Try
@@ -291,8 +327,6 @@ Public Module OracleDatabaseManager
         Return stats
     End Function
 
-
-
     ''' <summary>
     ''' Upserts a clan tracking record along with its operational choice category.
     ''' </summary>
@@ -360,6 +394,27 @@ Public Module OracleDatabaseManager
         End Try
         Return clansList
     End Function
+    ''' <summary>
+    ''' Returns all clans registered to a specific server guild, sorted by classification.
+    ''' </summary>
+    Public Async Function GetFWAClansAsync(guildId As ULong) As Task(Of List(Of Tuple(Of String, String, String)))
+        Dim clansList As New List(Of Tuple(Of String, String, String))()
+        Dim query As String = "SELECT clan_tag, clan_name, NVL(clan_category, 'Unassigned') FROM tracked_clans WHERE guild_id = :guildId ORDER BY clan_category, clan_name"
+
+        Try
+            Using cmd As New OracleCommand(query, conn)
+                cmd.Parameters.Add(New OracleParameter("guildId", OracleDbType.Int64)).Value = Convert.ToInt64(guildId)
+                Using reader As OracleDataReader = CType(Await cmd.ExecuteReaderAsync(), OracleDataReader)
+                    While Await reader.ReadAsync()
+                        clansList.Add(Tuple.Create(reader.GetString(0), reader.GetString(1), reader.GetString(2)))
+                    End While
+                End Using
+            End Using
+        Catch ex As Exception
+            Console.WriteLine($"[DB ERROR] GetClansAsync failed: {ex.Message}")
+        End Try
+        Return clansList
+    End Function
 
     ''' <summary>
     ''' Ruft alle Clans aus der Tabelle tracked_clans ab, bei denen das Feld DUMP den Wert '1' hat.
@@ -395,8 +450,6 @@ Public Module OracleDatabaseManager
         Return clanList
     End Function
 
-
-
     '' <summary>
     ''' Saves a new base layout with a name, links, and notes to the Oracle DB.
     ''' </summary>
@@ -430,7 +483,6 @@ Public Module OracleDatabaseManager
             Return False
         End Try
     End Function
-
 
     ''' <summary>
     ''' Fetches all registered base layouts for a specific server (Guild) to use in Autocomplete.
@@ -511,7 +563,6 @@ Public Module OracleDatabaseManager
 
         Return recordsList
     End Function
-
 
     Public Async Function GetLinkedAccountsAsync(discordId As String) As Task(Of List(Of Tuple(Of String, String, String)))
         Dim accountsList As New List(Of Tuple(Of String, String, String))()

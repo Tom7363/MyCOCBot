@@ -186,6 +186,20 @@ Public Class ReadyHandler
     .Description = "Downloads live FWA weights and updates or creates the Oracle database table"
 }
 
+                                 Dim ccCmd = New SlashCommandBuilder() With {
+    .Name = "cc",
+    .Description = "Downloads live FWA war data"
+}.AddOption(New SlashCommandOptionBuilder() With {
+    .Name = "clantag",
+    .Description = "Type to search for a clan from the database...",
+    .Type = ApplicationCommandOptionType.String,
+    .IsRequired = True,
+    .IsAutocomplete = True,
+    .MinLength = 3, ' Verhindert zu kurze Fehleingaben
+    .MaxLength = 12 ' Schützt vor übermäßig langen Strings
+})
+                                 Await guild.CreateApplicationCommandAsync(ccCmd.Build())
+
                                  Await guild.CreateApplicationCommandAsync(weightUpdateCmd.Build())
                                  Await guild.CreateApplicationCommandAsync(rosterCreateCmd.Build())
 

@@ -68,19 +68,16 @@ Public Module ClanManagerCommands
         End If
     End Function
 
-    ''' <summary>
-    ''' Formats list output grids via /clan-list
-    ''' </summary>
-    Public Async Function HandleClanListAsync(command As SocketSlashCommand) As Task
-        ' Defer response since we are making multiple database and API calls
-        Await command.DeferAsync()
 
+    ''' <summary>
+    ''' Central core logic engine that queries database/API and generates the fresh embed and button layouts.
+    ''' </summary>
+    Public Async Function BuildClanListMessageAsync(guildId As ULong) As Task(Of Tuple(Of Embed, MessageComponent))
         ' 1. Fetch tracked clans from Oracle DB
-        Dim clans = Await OracleDatabaseManager.GetClansAsync(command.GuildId.Value)
+        Dim clans = Await OracleDatabaseManager.GetClansAsync(guildId)
 
         If clans.Count = 0 Then
-            Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = "ℹ️ No clans are registered to this server database. Use `/clan-add` to begin.")
-            Return
+            Return Nothing
         End If
 
         ' Lists to separate types dynamically
@@ -164,8 +161,40 @@ Public Module ClanManagerCommands
         embed.WithDescription(description.ToString())
         embed.WithFooter(footer:=New EmbedFooterBuilder().WithText($"Total : {clans.Count} Clans"))
 
-        ' Send final formatted layout back to Discord
-        Await command.ModifyOriginalResponseAsync(Sub(p) p.Embed = embed.Build())
+        ' =========================================================================
+        ' INTERACTIVE REFRESH INTERACTION BUTTON GENERATION
+        ' =========================================================================
+        ' Build the physical action row framework button directly inside this transaction thread boundary
+        Dim components = New ComponentBuilder().WithButton(
+        label:="Refresh",
+        customId:="refresh_clan_list",
+        style:=ButtonStyle.Primary,
+        emote:=New Emoji("🔄")
+    ).Build()
+
+        ' Return both elements grouped inside a Tuple wrapper
+        Return Tuple.Create(embed.Build(), components)
+
+    End Function
+
+
+    ''' <summary>
+    ''' Formats list output grids via /clan-list
+    ''' </summary>
+    Public Async Function HandleClanListAsync(command As SocketSlashCommand) As Task
+        Await command.DeferAsync()
+
+        ' Invoke the centralized core rendering engine
+        Dim messageData = Await BuildClanListMessageAsync(command.GuildId.Value)
+
+        If messageData IsNot Nothing Then
+            Await command.ModifyOriginalResponseAsync(Sub(p)
+                                                          p.Embed = messageData.Item1
+                                                          p.Components = messageData.Item2
+                                                      End Sub)
+        Else
+            Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = "ℹ️ No clans are registered to this server database. Use `/clan-add` to begin.")
+        End If
     End Function
 
     ''' <summary>

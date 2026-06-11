@@ -1,15 +1,19 @@
 ﻿Imports System
 Imports System.IO
 Imports System.Linq
+Imports System.Net
+Imports System.Net.Http
 Imports System.Runtime.InteropServices
 Imports System.Text
+Imports System.Threading
 Imports System.Threading.Tasks
 Imports Discord
 Imports Discord.Rest
 Imports Discord.Webhook
 Imports Discord.WebSocket
+Imports HtmlAgilityPack
+Imports Newtonsoft.Json
 Imports Newtonsoft.Json.Linq
-
 Public Class CommandHandler
     Private ReadOnly _client As DiscordSocketClient
     Private ReadOnly LogPfad As String = Path.Combine(AppContext.BaseDirectory, "coc_log.txt")
@@ -19,79 +23,136 @@ Public Class CommandHandler
         _client = client
     End Sub
 
-    ' The main handler called whenever a slash command is executed
-    Public Function HandleSlashCommandAsync(command As SocketSlashCommand) As Task
-        ' Offload execution to a background thread to prevent gateway blocking
-        Task.Run(Async Function()
-                     Try
-                         Select Case command.Data.Name.ToLower()
-                             Case "ping"
-                                 Await HandlePingCommandAsync(command)
+    ' English Code Comments
+    ''' <summary>
+    ''' The main handler called natively by Discord.Net whenever a slash command is executed.
+    ''' Cleaned to use native Async/Await to prevent Linux-ARM64 thread spinlocks (100% CPU bug).
+    ''' </summary>
+    Public Async Function HandleSlashCommandAsync(command As SocketSlashCommand) As Task
+        Try
+            Select Case command.Data.Name.ToLower()
+                Case "ping"
+                    Await HandlePingCommandAsync(command)
 
-                             Case "template"
-                                 Await HandleTemplateCommandAsync(command)
+                Case "template"
+                    Await HandleTemplateCommandAsync(command)
 
-                             Case "news"
-                                 Await HandleNewsCommandAsync(command)
+                Case "news"
+                    Await HandleNewsCommandAsync(command)
 
-                             Case "threadembed"
-                                 Await HandleThreadEmbedCommandAsync(command)
+                Case "threadembed"
+                    Await HandleThreadEmbedCommandAsync(command)
 
-                             Case "deletethread"
-                                 Await HandleDeleteThreadCommandAsync(command)
+                Case "deletethread"
+                    Await HandleDeleteThreadCommandAsync(command)
 
-                             Case "movetothread"
-                                 Await HandleMoveToThreadCommandAsync(command)
+                Case "movetothread"
+                    Await HandleMoveToThreadCommandAsync(command)
 
-                             Case "roles"
-                                 Await HandleRolesCommandAsync(command)
+                Case "roles"
+                    Await HandleRolesCommandAsync(command)
 
-                             Case "channels"
-                                 Await HandleChannelsCommandAsync(command)
-                             Case "showclans"
-                                 Await HandleClanListAsync(command)
+                Case "channels"
+                    Await HandleChannelsCommandAsync(command)
+                Case "showclans"
+                    Await HandleClanListAsync(command)
 
-                             Case "status"
-                                 ' Add Await here since it pulls live data from Oracle DB
-                                 Dim embedBuilder = Await GetResourceUsageEmbedAsync(_client)
-                                 ' Send response to user
-                                 Await command.RespondAsync(embed:=embedBuilder.Build())
-                             Case "clan-add"
-                                 Await ClanManagerCommands.HandleClanAddAsync(command)
-                             Case "clan-remove"
-                                 Await ClanManagerCommands.HandleClanRemoveAsync(command)
-                             Case "clan-list"
-                                 Await ClanManagerCommands.HandleClanListAsync(command)
-                             Case "dump"
-                                 Await ClanManagerCommands.HandleDumpListAsync(command)
-                             Case "whois"
-                                 Await ClanManagerCommands.HandleWhoIsCommandAsync(command, _client)
+                Case "status"
+                    ' Add Await here since it pulls live data from Oracle DB
+                    Dim embedBuilder = Await GetResourceUsageEmbedAsync(_client)
+                    ' Send response to user
+                    Await command.RespondAsync(embed:=embedBuilder.Build())
+                Case "clan-add"
+                    Await ClanManagerCommands.HandleClanAddAsync(command)
+                Case "clan-remove"
+                    Await ClanManagerCommands.HandleClanRemoveAsync(command)
+                Case "clan-list"
+                    Await ClanManagerCommands.HandleClanListAsync(command)
+                Case "dump"
+                    Await ClanManagerCommands.HandleDumpListAsync(command)
+                Case "whois"
+                    Await ClanManagerCommands.HandleWhoIsCommandAsync(command, _client)
 
-                             Case "cl"
-                                 Await ClanManagerCommands.HandleClCommandAsync(command)
+                Case "cl"
+                    Await ClanManagerCommands.HandleClCommandAsync(command)
 
-                             Case "layout"
-                                 Await HandleLayoutCommandAsync(command)
-                             Case "bases"
-                                 Await HandleBasesCommandAsync(command)
-                             Case "layout-add"
-                                 Await HandleLayoutAddAsync(command)
-                             Case "roaster-create"
-                                 Await HandleRosterCreateAsync(command)
-                             Case "weight-update"
-                                 Await HandleWeigthUpdateAsync(command)
+                Case "layout"
+                    Await HandleLayoutCommandAsync(command)
+                Case "bases"
+                    Await HandleBasesCommandAsync(command)
+                Case "layout-add"
+                    Await HandleLayoutAddAsync(command)
+                Case "roaster-create"
+                    Await HandleRosterCreateAsync(command)
+                Case "weight-update"
+                    Await HandleWeigthUpdateAsync(command)
+                Case "cc"
+                    ' 1. Acknowledge the command instantly (crucial since FlareSolverr bypasses might take a few seconds)
+                    Await command.DeferAsync()
 
-                             Case Else
-                                 Await command.RespondAsync("❌ Unknown command.", ephemeral:=True)
-                         End Select
-                     Catch ex As Exception
-                         Console.WriteLine($"[ERROR] Exception occurred while executing /{command.Data.Name}: {ex.Message}")
-                     End Try
-                 End Function)
+                    ' 2. Retrieve the value of the "clantag" option safely
+                    Dim clanTagOption = command.Data.Options.FirstOrDefault(Function(o) o.Name = "clantag")
+                    If clanTagOption IsNot Nothing Then
+                        Dim clanTag As String = clanTagOption.Value.ToString()
 
-        Return Task.CompletedTask
+                        ' 1. Call the parsing engine and store the extracted winstring result
+                        Dim predictionResult As String = Await ChocolateClashAPI.GetChocolateClanWarAsync(clanTag)
+
+                        If Not String.IsNullOrEmpty(predictionResult) Then
+                            ' 2. Determine the embed sidebar color based on the prediction keywords
+                            Dim embedColor As Color = Color.LightGrey ' Default fallback color
+
+                            Dim lowercaseResult As String = predictionResult.ToLower()
+                            If lowercaseResult.Contains("should win") OrElse lowercaseResult.Contains("winner") Then
+                                embedColor = Color.Green ' Clan is predicted to win
+                            ElseIf lowercaseResult.Contains("should lose") OrElse lowercaseResult.Contains("loser") Then
+                                embedColor = Color.Red ' Clan is predicted to lose
+                            ElseIf lowercaseResult.Contains("draw") OrElse lowercaseResult.Contains("tie") Then
+                                embedColor = Color.Gold ' Tie/Draw scenario
+                            End If
+
+                            ' 3. Construct the stylized Discord Embed interface card
+                            Dim embed = New EmbedBuilder() With {
+                                .Title = "📊 FWA War Live Prediction",
+                                .Description = $"Live calculation data fetched successfully from the farming network pipeline.",
+                                .Color = embedColor,
+                                .Timestamp = DateTimeOffset.Now
+                            }
+
+                            ' Add clean structured field sections to the card layout
+                            embed.AddField("Target Clan Tag", $"`#{clanTag}`", inline:=True)
+                            embed.AddField("Prediction Outcome", $"**{predictionResult}**", inline:=False)
+
+                            ' Optional visual styling add-on anchors
+                            embed.WithFooter(footer:=New EmbedFooterBuilder() With {
+                                .Text = "Oracle Cloud Ampere Node • FlareSolverr Core"
+                            })
+
+                            ' 4. Push the fully rendered rich embed card straight back onto the user's Discord interface
+                            Await command.FollowupAsync(embed:=embed.Build())
+                        Else
+                            ' Fallback if the layout parsing node structure failed on the VM disk partition
+                            Await command.FollowupAsync($"⚠️ **Warning:** The bypass completed, but no layout prediction strings could be parsed for Clan Tag `#{clanTag}`.")
+                        End If
+                    Else
+                        Await command.FollowupAsync("Error: No Clan Tag parameter was provided by the client wrapper framework.")
+                    End If
+                Case Else
+                    Await command.RespondAsync("❌ Unknown command.", ephemeral:=True)
+            End Select
+        Catch ex As Exception
+            ' Log the error safely using thread-yielding async file operations
+            Dim errorLog As String = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} [CRITICAL] Command execution failed: {ex.Message}{Environment.NewLine}{ex.StackTrace}"
+            Console.WriteLine(errorLog)
+            Try
+                File.AppendAllText(LogPfad, errorLog & Environment.NewLine)
+            Catch
+                ' Ignore if log file is locked by the OS filesystem
+            End Try
+        End Try
+        Return
     End Function
-
+    ' Füge diese beiden Zeilen ein, um den fehlenden Client bereitzustellen:
     '' <summary>
     ''' Processes the creation of a new base layout entry via /layout-add
     ''' </summary>
@@ -288,7 +349,7 @@ Public Class CommandHandler
 
     Public Async Function HandleAutocompleteAsync(autocomplete As SocketAutocompleteInteraction) As Task
         Select Case autocomplete.Data.CommandName
-            Case "cl"
+            Case "cl", "cc"
                 ' Get what the user has typed so far
                 Dim userInput As String = autocomplete.Data.Options.First().Value.ToString().ToLower()
 
@@ -328,7 +389,37 @@ Public Class CommandHandler
 
         End Select
     End Function
+    ' English Code Comments
+    ''' <summary>
+    ''' Intercepts and processes component interactions (like buttons) triggered in Discord channels.
+    ''' </summary>
+    Public Async Function HandleButtonExecutionAsync(component As SocketMessageComponent) As Task
+        If component.Data.CustomId = "refresh_clan_list" Then
+            Try
+                Await component.DeferAsync()
 
+                ' Invoke the identical central core engine to pull brand new live stats
+                Dim messageData = Await BuildClanListMessageAsync(component.GuildId.Value)
+
+                If messageData IsNot Nothing Then
+                    ' Modify the existing UI frame with synchronized dataset changes
+                    Await component.ModifyOriginalResponseAsync(Sub(p)
+                                                                    p.Embed = messageData.Item1
+                                                                    p.Components = messageData.Item2
+                                                                End Sub)
+                    API_COC.DebugPrint("[BUTTON SUCCESS] Clan list embed was synchronized perfectly via code re-use.")
+                Else
+                    Await component.ModifyOriginalResponseAsync(Sub(p)
+                                                                    p.Content = "ℹ️ No clans are registered to this server database. Use `/clan-add` to begin."
+                                                                    p.Embed = Nothing
+                                                                    p.Components = Nothing
+                                                                End Sub)
+                End If
+            Catch ex As Exception
+                Console.WriteLine($"[BUTTON CRITICAL] Failed to execute interactive code re-use pipeline: {ex.Message}")
+            End Try
+        End If
+    End Function
     ' =========================================================================
     ' SLASH COMMAND IMPLEMENTATIONS
     ' =========================================================================
@@ -337,7 +428,7 @@ Public Class CommandHandler
         ' -----------------------------------------------------------------
         ' COMMAND: /ping
         ' -----------------------------------------------------------------
-        Const Version As String = "01.00.00 E"
+        Const Version As String = "01.00.00 F"
         Dim latency As Integer = _client.Latency
         Dim osDescription As String = System.Runtime.InteropServices.RuntimeInformation.OSDescription
 
@@ -514,8 +605,8 @@ Public Class CommandHandler
                                     End If
 
                                 Else
-                                        ' Fallback: Wenn Datei auf der VM fehlt
-                                        tempWebhook = Await targetChannel.CreateWebhookAsync("Pak News Webhook")
+                                    ' Fallback: Wenn Datei auf der VM fehlt
+                                    tempWebhook = Await targetChannel.CreateWebhookAsync("Pak News Webhook")
                                 End If
                             End If
                             ' Bind clean client processing interface engine
