@@ -1,0 +1,14 @@
+{
+  "Title": "🛡️ Roster Overview: {CWL_NAME}",
+  "Description": "Current lineup for Season **{DB_NAME}**:\n\n{PLAYER_ROWS}",
+  "Color": "15418782",
+  "ThumbnailUrl": "{CLAN_BADGE_URL}",
+  "Fields": [
+    {
+      "Name": "📊 Summary Statistics",
+      "Value": "👥 **Total Records:** {TOTAL_RECORDS}\n⚖️ **Average Weight:** {AVG_WEIGHT}k",
+      "IsInline": false
+    }
+  ],
+  "FooterText": "Clash of Clans Bot | Live Query"
+}

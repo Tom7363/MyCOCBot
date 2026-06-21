@@ -1,4 +1,5 @@
 ﻿Imports System
+Imports System.ComponentModel
 Imports System.Linq
 Imports System.Text
 Imports System.Threading.Tasks
@@ -9,680 +10,384 @@ Imports Newtonsoft.Json.Linq
 Imports Oracle.ManagedDataAccess.Client
 
 Public Module ClanManagerCommands
+    Public Class ClanManager
+        Public Shared Async Function RegisterClanmanagerCommandAsync(client As DiscordSocketClient, guild As SocketGuild) As Task
+            ' /showclans
+            Dim showClansCmd = New SlashCommandBuilder() With {
+                                     .Name = "showclans",
+                                     .Description = "Displays all registered Clash of Clans clans from the Oracle database"
+                                 }
 
-    ''' <summary>
-    ''' Evaluates and saves an added clan via /clan-add [tag] [category]
-    ''' </summary>
-    Public Async Function HandleClanAddAsync(command As SocketSlashCommand) As Task
-        Await command.DeferAsync()
-        Dim guildUser = TryCast(command.User, SocketGuildUser)
-        If guildUser IsNot Nothing AndAlso guildUser.Roles.Any(Function(r) r.Name = "Server Orga") Then
 
-            Dim clanTag As String = command.Data.Options.FirstOrDefault(Function(o) o.Name = "tag")?.Value.ToString().ToUpper().Replace(" ", "")
-            Dim category As String = command.Data.Options.FirstOrDefault(Function(o) o.Name = "category")?.Value.ToString()
+            ' Command Structure setup: /clan-add [tag] [category]
+            Dim clanAddCmd As New SlashCommandBuilder()
+            clanAddCmd.WithName("clan-add")
+            clanAddCmd.WithDescription("Adds a brand new clan target entry to the active guild database layout.")
+            clanAddCmd.AddOption("tag", ApplicationCommandOptionType.String, "The structural tag id belonging to the clan (e.g. #52LJV8)", isRequired:=True)
 
-            If Not clanTag.StartsWith("#") Then clanTag = "#" & clanTag
+            ' Establish custom restriction array inputs (Choices dropdown)
+            Dim categoryOption As New SlashCommandOptionBuilder() With {
+                                .Name = "category",
+                                .Description = "The functional operating category mapping for this clan tracking stream.",
+                                .Type = ApplicationCommandOptionType.String,
+                                .IsRequired = True
+                                }
 
-            ' 1. Check validation through external Supercell API endpoint
+            categoryOption.AddChoice("FWA", "FWA")
+            categoryOption.AddChoice("CWL", "CWL")
+            categoryOption.AddChoice("CWL Backup", "CWL Backup")
+
+            clanAddCmd.AddOption(categoryOption)
+
+            ' Command Structure setup: /clan-remove [tag]
+            Dim clanRemoveCmd As New SlashCommandBuilder()
+            clanRemoveCmd.WithName("clan-remove")
+            clanRemoveCmd.WithDescription("Removes a registered clan target entry away from the server tracking logs.")
+            clanRemoveCmd.AddOption("tag", ApplicationCommandOptionType.String, "The specific targeted tracker tag you want dropped.", isRequired:=True)
+
+            ' Command Structure setup: /clan-list
+            Dim clanListCmd As New SlashCommandBuilder()
+            clanListCmd.WithName("clan-list")
+            clanListCmd.WithDescription("Displays a comprehensive list of all verified clan entries registered here.")
+            ' Command Structure setup: /clan-list
+            Dim dumpListCmd As New SlashCommandBuilder()
+            dumpListCmd.WithName("dump")
+            dumpListCmd.WithDescription("Displays a comprehensive list of all clans to dump capital gold.")
+
+            ' Command Structure: /cl [clan]
+            Dim clCmd As New SlashCommandBuilder()
+            clCmd.WithName("cl")
+            clCmd.WithDescription("Shows the direct link to join a specific tracked clan.")
+
+            ' Important: Set IsAutocomplete = True
+            clCmd.AddOption("clan", ApplicationCommandOptionType.String, "Type to search for a clan from the database...", isRequired:=True, isAutocomplete:=True)
+            Await guild.CreateApplicationCommandAsync(clCmd.Build())
+            Await guild.CreateApplicationCommandAsync(clanListCmd.Build())
+            Await guild.CreateApplicationCommandAsync(dumpListCmd.Build())
+            Await guild.CreateApplicationCommandAsync(clanAddCmd.Build())
+            Await guild.CreateApplicationCommandAsync(clanRemoveCmd.Build())
+
+            ' Zusammen mit den anderen Commands an Discord senden
+            Await guild.CreateApplicationCommandAsync(showClansCmd.Build())
+
+        End Function
+
+        ''' <summary>
+        ''' Evaluates and saves an added clan via /clan-add [tag] [category]
+        ''' </summary>
+        Public Shared Async Function HandleClanAddAsync(command As SocketSlashCommand) As Task
+            Await command.DeferAsync()
+            Dim guildUser = TryCast(command.User, SocketGuildUser)
+            If guildUser IsNot Nothing AndAlso guildUser.Roles.Any(Function(r) r.Name = "Server Orga") Then
+
+                Dim clanTag As String = command.Data.Options.FirstOrDefault(Function(o) o.Name = "tag")?.Value.ToString().ToUpper().Replace(" ", "")
+                Dim category As String = command.Data.Options.FirstOrDefault(Function(o) o.Name = "category")?.Value.ToString()
+
+                If Not clanTag.StartsWith("#") Then clanTag = "#" & clanTag
+
+                ' 1. Check validation through external Supercell API endpoint
+                Dim cocApi As New ClashOfClansAPI(CocService.apiToken)
+
+                Dim clanData As JObject = Await cocApi.GetClanDataAsync(clanTag)
+                If clanData Is Nothing Then
+                    Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = $"❌ Clan tag `{clanTag}` could not be found within the Clash of Clans API system.")
+                    Return
+                End If
+
+                Dim clanName As String = clanData("name")?.ToString()
+
+                ' 2. Persist using the database helper functions
+                Dim success As Boolean = Await OracleDatabaseManager.AddClanAsync(command.GuildId.Value, clanTag, clanName, category)
+                If success Then
+                    Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = $"✅ **{clanName}** (`{clanTag}`) successfully registered as a **{category}** clan!")
+                Else
+                    Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = "❌ A database operation error occurred while processing the save request.")
+                End If
+            Else
+                Await command.RespondAsync("❌ You do not have permission to use this command! Required role: **Server Orga**", ephemeral:=True)
+            End If
+        End Function
+        ''' <summary>
+        ''' Handles removing records via /clan-remove [tag]
+        ''' </summary>
+        Public Shared Async Function HandleClanRemoveAsync(command As SocketSlashCommand) As Task
+            Await command.DeferAsync()
+            Dim guildUser = TryCast(command.User, SocketGuildUser)
+            If guildUser IsNot Nothing AndAlso guildUser.Roles.Any(Function(r) r.Name = "Server Orga") Then
+
+                Dim clanTag As String = command.Data.Options.First().Value.ToString().ToUpper().Replace(" ", "")
+                If Not clanTag.StartsWith("#") Then clanTag = "#" & clanTag
+
+                Dim success As Boolean = Await OracleDatabaseManager.RemoveClanAsync(command.GuildId.Value, clanTag)
+                If success Then
+                    Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = $"🗑️ Clan `{clanTag}` has been successfully removed from this server's database entries.")
+                Else
+                    Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = $"❌ Clan `{clanTag}` was not found or could not be removed from data tables.")
+                End If
+            Else
+                Await command.RespondAsync("❌ You do not have permission to use this command! Required role: **Server Orga**", ephemeral:=True)
+            End If
+        End Function
+        ''' <summary>
+        ''' Central core logic engine that queries database/API and generates the fresh embed and button layouts.
+        ''' </summary>
+        Private Shared Async Function BuildClanListMessageAsync(guildId As ULong) As Task(Of Tuple(Of Embed, MessageComponent))
+            ' 1. Fetch tracked clans from Oracle DB
+            Dim clans = Await OracleDatabaseManager.GetClansAsync(guildId)
+
+            If clans.Count = 0 Then
+                Return Nothing
+            End If
+
+            ' Lists to separate types dynamically
+            Dim cwlClans As New List(Of Tuple(Of String, String))()
+            Dim fwaClans As New List(Of Tuple(Of String, String))()
+            Dim backupClans As New List(Of Tuple(Of String, String))()
+
             Dim cocApi As New ClashOfClansAPI(CocService.apiToken)
 
-            Dim clanData As JObject = Await cocApi.GetClanDataAsync(clanTag)
-            If clanData Is Nothing Then
-                Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = $"❌ Clan tag `{clanTag}` could not be found within the Clash of Clans API system.")
-                Return
-            End If
+            ' 2. Categorize and fetch live member counts from Supercell API
+            For Each clan In clans
+                Dim tag As String = clan.Item1
+                Dim name As String = clan.Item2
+                Dim cat As String = clan.Item3
 
-            Dim clanName As String = clanData("name")?.ToString()
-
-            ' 2. Persist using the database helper functions
-            Dim success As Boolean = Await OracleDatabaseManager.AddClanAsync(command.GuildId.Value, clanTag, clanName, category)
-            If success Then
-                Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = $"✅ **{clanName}** (`{clanTag}`) successfully registered as a **{category}** clan!")
-            Else
-                Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = "❌ A database operation error occurred while processing the save request.")
-            End If
-        Else
-            Await command.RespondAsync("❌ You do not have permission to use this command! Required role: **Server Orga**", ephemeral:=True)
-        End If
-    End Function
-
-    ''' <summary>
-    ''' Handles removing records via /clan-remove [tag]
-    ''' </summary>
-    Public Async Function HandleClanRemoveAsync(command As SocketSlashCommand) As Task
-        Await command.DeferAsync()
-        Dim guildUser = TryCast(command.User, SocketGuildUser)
-        If guildUser IsNot Nothing AndAlso guildUser.Roles.Any(Function(r) r.Name = "Server Orga") Then
-
-            Dim clanTag As String = command.Data.Options.First().Value.ToString().ToUpper().Replace(" ", "")
-            If Not clanTag.StartsWith("#") Then clanTag = "#" & clanTag
-
-            Dim success As Boolean = Await OracleDatabaseManager.RemoveClanAsync(command.GuildId.Value, clanTag)
-            If success Then
-                Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = $"🗑️ Clan `{clanTag}` has been successfully removed from this server's database entries.")
-            Else
-                Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = $"❌ Clan `{clanTag}` was not found or could not be removed from data tables.")
-            End If
-        Else
-            Await command.RespondAsync("❌ You do not have permission to use this command! Required role: **Server Orga**", ephemeral:=True)
-        End If
-    End Function
+                Dim memberCount As String = "N/A"
 
 
-    ''' <summary>
-    ''' Central core logic engine that queries database/API and generates the fresh embed and button layouts.
-    ''' </summary>
-    Public Async Function BuildClanListMessageAsync(guildId As ULong) As Task(Of Tuple(Of Embed, MessageComponent))
-        ' 1. Fetch tracked clans from Oracle DB
-        Dim clans = Await OracleDatabaseManager.GetClansAsync(guildId)
+                ' Fetch live member count from API
+                Dim clanData As JObject = Await cocApi.GetClanDataAsync(tag)
+                If clanData IsNot Nothing AndAlso clanData("members") IsNot Nothing Then
+                    memberCount = clanData("members").ToString()
+                End If
 
-        If clans.Count = 0 Then
-            Return Nothing
-        End If
+                ' Create the official CoC Deep Link (remove '#' for the URL query parameter)
+                Dim cleanTagForUrl As String = tag.Replace("#", "%23")
+                Dim cocDeepLink As String = $"https://link.clashofclans.com/en/?action=OpenClanProfile&tag={cleanTagForUrl}"
+                ' Format the line using Discord Markdown link style: [Text](URL)
+                Dim formattedLine As String = $"[{name} ({tag})]({cocDeepLink}) - {memberCount}"
 
-        ' Lists to separate types dynamically
-        Dim cwlClans As New List(Of Tuple(Of String, String))()
-        Dim fwaClans As New List(Of Tuple(Of String, String))()
-        Dim backupClans As New List(Of Tuple(Of String, String))()
+                ' Group into respective categories
+                If cat.Equals("CWL", StringComparison.OrdinalIgnoreCase) Then
+                    cwlClans.Add(Tuple.Create(name, formattedLine))
+                ElseIf cat.Equals("FWA", StringComparison.OrdinalIgnoreCase) Then
+                    fwaClans.Add(Tuple.Create(name, formattedLine))
+                Else
+                    backupClans.Add(Tuple.Create(name, formattedLine))
+                End If
+            Next
 
-        Dim cocApi As New ClashOfClansAPI(CocService.apiToken)
+            ' Sort lists by Clan Name to maintain clean alphabetized appearance
+            cwlClans.Sort(Function(x, y) x.Item1.CompareTo(y.Item1))
+            fwaClans.Sort(Function(x, y) x.Item1.CompareTo(y.Item1))
+            backupClans.Sort(Function(x, y) x.Item1.CompareTo(y.Item1))
 
-        ' 2. Categorize and fetch live member counts from Supercell API
-        For Each clan In clans
-            Dim tag As String = clan.Item1
-            Dim name As String = clan.Item2
-            Dim cat As String = clan.Item3
-
-            Dim memberCount As String = "N/A"
-
-
-            ' Fetch live member count from API
-            Dim clanData As JObject = Await cocApi.GetClanDataAsync(tag)
-            If clanData IsNot Nothing AndAlso clanData("members") IsNot Nothing Then
-                memberCount = clanData("members").ToString()
-            End If
-
-            ' Create the official CoC Deep Link (remove '#' for the URL query parameter)
-            Dim cleanTagForUrl As String = tag.Replace("#", "%23")
-            Dim cocDeepLink As String = $"https://link.clashofclans.com/en/?action=OpenClanProfile&tag={cleanTagForUrl}"
-            ' Format the line using Discord Markdown link style: [Text](URL)
-            Dim formattedLine As String = $"[{name} ({tag})]({cocDeepLink}) - {memberCount}"
-
-            ' Group into respective categories
-            If cat.Equals("CWL", StringComparison.OrdinalIgnoreCase) Then
-                cwlClans.Add(Tuple.Create(name, formattedLine))
-            ElseIf cat.Equals("FWA", StringComparison.OrdinalIgnoreCase) Then
-                fwaClans.Add(Tuple.Create(name, formattedLine))
-            Else
-                backupClans.Add(Tuple.Create(name, formattedLine))
-            End If
-        Next
-
-        ' Sort lists by Clan Name to maintain clean alphabetized appearance
-        cwlClans.Sort(Function(x, y) x.Item1.CompareTo(y.Item1))
-        fwaClans.Sort(Function(x, y) x.Item1.CompareTo(y.Item1))
-        backupClans.Sort(Function(x, y) x.Item1.CompareTo(y.Item1))
-
-        ' 3. Build the Discord layout output matching your design
-        Dim embed As New EmbedBuilder() With {
+            ' 3. Build the Discord layout output matching your design
+            Dim embed As New EmbedBuilder() With {
             .Title = "PAK: 💎FWA💎 Clans",
             .Color = Color.Blue,
             .Timestamp = DateTimeOffset.Now
         }
 
-        Dim description As New StringBuilder()
+            Dim description As New StringBuilder()
 
-        ' Append CWL Section
-        If cwlClans.Count > 0 Then
-            description.AppendLine("**CWL**")
-            For Each cwl In cwlClans
-                description.AppendLine(cwl.Item2)
-            Next
-            description.AppendLine() ' Spacer line
-        End If
+            ' Append CWL Section
+            If cwlClans.Count > 0 Then
+                description.AppendLine("**CWL**")
+                For Each cwl In cwlClans
+                    description.AppendLine(cwl.Item2)
+                Next
+                description.AppendLine() ' Spacer line
+            End If
 
-        ' Append FWA Section
-        If fwaClans.Count > 0 Then
-            description.AppendLine("**FWA**")
-            For Each fwa In fwaClans
-                description.AppendLine(fwa.Item2)
-            Next
-            description.AppendLine() ' Spacer line
-        End If
+            ' Append FWA Section
+            If fwaClans.Count > 0 Then
+                description.AppendLine("**FWA**")
+                For Each fwa In fwaClans
+                    description.AppendLine(fwa.Item2)
+                Next
+                description.AppendLine() ' Spacer line
+            End If
 
-        ' Append CWL Backup Section (if any exist)
-        If backupClans.Count > 0 Then
-            description.AppendLine("**CWL Backup**")
-            For Each backup In backupClans
-                description.AppendLine(backup.Item2)
-            Next
-        End If
+            ' Append CWL Backup Section (if any exist)
+            If backupClans.Count > 0 Then
+                description.AppendLine("**CWL Backup**")
+                For Each backup In backupClans
+                    description.AppendLine(backup.Item2)
+                Next
+            End If
 
-        embed.WithDescription(description.ToString())
-        embed.WithFooter(footer:=New EmbedFooterBuilder().WithText($"Total : {clans.Count} Clans"))
+            embed.WithDescription(description.ToString())
+            embed.WithFooter(footer:=New EmbedFooterBuilder().WithText($"Total : {clans.Count} Clans"))
 
-        ' =========================================================================
-        ' INTERACTIVE REFRESH INTERACTION BUTTON GENERATION
-        ' =========================================================================
-        ' Build the physical action row framework button directly inside this transaction thread boundary
-        Dim components = New ComponentBuilder().WithButton(
+            ' =========================================================================
+            ' INTERACTIVE REFRESH INTERACTION BUTTON GENERATION
+            ' =========================================================================
+            ' Build the physical action row framework button directly inside this transaction thread boundary
+            Dim components = New ComponentBuilder().WithButton(
         label:="Refresh",
         customId:="refresh_clan_list",
         style:=ButtonStyle.Primary,
         emote:=New Emoji("🔄")
     ).Build()
 
-        ' Return both elements grouped inside a Tuple wrapper
-        Return Tuple.Create(embed.Build(), components)
+            ' Return both elements grouped inside a Tuple wrapper
+            Return Tuple.Create(embed.Build(), components)
 
-    End Function
+        End Function
+        ''' <summary>
+        ''' Formats list output grids via /clan-list
+        ''' </summary>
+        Public Shared Async Function HandleClanListAsync(command As SocketSlashCommand) As Task
+            Await command.DeferAsync()
 
+            ' Invoke the centralized core rendering engine
+            Dim messageData = Await BuildClanListMessageAsync(command.GuildId.Value)
 
-    ''' <summary>
-    ''' Formats list output grids via /clan-list
-    ''' </summary>
-    Public Async Function HandleClanListAsync(command As SocketSlashCommand) As Task
-        Await command.DeferAsync()
+            If messageData IsNot Nothing Then
+                Await command.ModifyOriginalResponseAsync(Sub(p)
+                                                              p.Embed = messageData.Item1
+                                                              p.Components = messageData.Item2
+                                                          End Sub)
+            Else
+                Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = "ℹ️ No clans are registered to this server database. Use `/clan-add` to begin.")
+            End If
+        End Function
+        ''' <summary>
+        ''' Formats list output grids via /dump filtering clans where DUMP is '1'
+        ''' </summary>
+        Public Shared Async Function HandleDumpListAsync(command As SocketSlashCommand) As Task
+            Await command.DeferAsync()
 
-        ' Invoke the centralized core rendering engine
-        Dim messageData = Await BuildClanListMessageAsync(command.GuildId.Value)
+            ' 1. Fetch tracked clans from Oracle DB
+            Dim clans As List(Of Dictionary(Of String, String)) = Await OracleDatabaseManager.GetDumpClansAsync(command.GuildId.Value.ToString())
 
-        If messageData IsNot Nothing Then
-            Await command.ModifyOriginalResponseAsync(Sub(p)
-                                                          p.Embed = messageData.Item1
-                                                          p.Components = messageData.Item2
-                                                      End Sub)
-        Else
-            Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = "ℹ️ No clans are registered to this server database. Use `/clan-add` to begin.")
-        End If
-    End Function
-
-    ''' <summary>
-    ''' Formats list output grids via /dump filtering clans where DUMP is '1'
-    ''' </summary>
-    Public Async Function HandleDumpListAsync(command As SocketSlashCommand) As Task
-        Await command.DeferAsync()
-
-        ' 1. Fetch tracked clans from Oracle DB
-        Dim clans As List(Of Dictionary(Of String, String)) = Await OracleDatabaseManager.GetDumpClansAsync(command.GuildId.Value.ToString())
-
-        If clans Is Nothing OrElse clans.Count = 0 Then
-            Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = "ℹ️ No clans are marked for dump in this server database.")
-            Return
-        End If
-
-        Dim cocApi As New ClashOfClansAPI(CocService.apiToken)
-        Dim description As New StringBuilder()
-
-        ' 2. Build the list with correct URL formatting
-        For Each clan In clans
-            Dim tag As String = clan("tag")
-            Dim name As String = clan("name")
-            Dim memberCount As String = "N/A"
-
-            ' Fetch live member count from API
-            Dim clanData As Newtonsoft.Json.Linq.JObject = Await cocApi.GetClanDataAsync(tag)
-            If clanData IsNot Nothing AndAlso clanData("members") IsNot Nothing Then
-                memberCount = clanData("members").ToString()
+            If clans Is Nothing OrElse clans.Count = 0 Then
+                Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = "ℹ️ No clans are marked for dump in this server database.")
+                Return
             End If
 
-            ' FIX 1: Use the official Deep Link structure and escape the '#' properly
-            Dim cleanTagForUrl As String = tag.Replace("#", "%23")
-            Dim cocDeepLink As String = $"https://link.clashofclans.com/en/?action=OpenClanProfile&tag={cleanTagForUrl}"
+            Dim cocApi As New ClashOfClansAPI(CocService.apiToken)
+            Dim description As New StringBuilder()
 
-            ' FIX 2: Correct Discord Markdown formatting: • [Clan Name (#Tag)](URL) - Members
-            description.AppendLine($"• [{name} ({tag})]({cocDeepLink}) - {memberCount}")
-        Next
+            ' 2. Build the list with correct URL formatting
+            For Each clan In clans
+                Dim tag As String = clan("tag")
+                Dim name As String = clan("name")
+                Dim memberCount As String = "N/A"
 
-        ' 3. Build and send the final Embed
-        Dim embed As New EmbedBuilder() With {
+                ' Fetch live member count from API
+                Dim clanData As Newtonsoft.Json.Linq.JObject = Await cocApi.GetClanDataAsync(tag)
+                If clanData IsNot Nothing AndAlso clanData("members") IsNot Nothing Then
+                    memberCount = clanData("members").ToString()
+                End If
+
+                ' FIX 1: Use the official Deep Link structure and escape the '#' properly
+                Dim cleanTagForUrl As String = tag.Replace("#", "%23")
+                Dim cocDeepLink As String = $"https://link.clashofclans.com/en/?action=OpenClanProfile&tag={cleanTagForUrl}"
+
+                ' FIX 2: Correct Discord Markdown formatting: • [Clan Name (#Tag)](URL) - Members
+                description.AppendLine($"• [{name} ({tag})]({cocDeepLink}) - {memberCount}")
+            Next
+
+            ' 3. Build and send the final Embed
+            Dim embed As New EmbedBuilder() With {
             .Title = "PAK: Registered Clans (Dump)",
             .Color = Color.Blue,
             .Timestamp = DateTimeOffset.Now
         }
 
-        embed.WithDescription(description.ToString())
-        embed.WithFooter(footer:=New EmbedFooterBuilder().WithText($"Total: {clans.Count} Clans"))
+            embed.WithDescription(description.ToString())
+            embed.WithFooter(footer:=New EmbedFooterBuilder().WithText($"Total: {clans.Count} Clans"))
 
-        Await command.ModifyOriginalResponseAsync(Sub(p) p.Embed = embed.Build())
-    End Function
-    Public Async Function HandleClCommandAsync(command As SocketSlashCommand) As Task
-        Await command.DeferAsync()
+            Await command.ModifyOriginalResponseAsync(Sub(p) p.Embed = embed.Build())
+        End Function
+        Public Shared Async Function HandleClCommandAsync(command As SocketSlashCommand) As Task
+            Await command.DeferAsync()
 
-        ' The value received here is the clan tag (e.g., #2JLJVYQPU) passed from Autocomplete
-        Dim clanTag As String = command.Data.Options.First().Value.ToString().ToUpper().Trim()
+            ' The value received here is the clan tag (e.g., #2JLJVYQPU) passed from Autocomplete
+            Dim clanTag As String = command.Data.Options.First().Value.ToString().ToUpper().Trim()
 
-        ' Open connection to check current stats if necessary
-        Dim cocApi As New ClashOfClansAPI(CocService.apiToken)
-        Dim clanData = Await cocApi.GetClanDataAsync(clanTag)
+            ' Open connection to check current stats if necessary
+            Dim cocApi As New ClashOfClansAPI(CocService.apiToken)
+            Dim clanData = Await cocApi.GetClanDataAsync(clanTag)
 
-        Dim clanName As String = "Unknown Clan"
-        Dim memberCount As String = "N/A"
+            Dim clanName As String = "Unknown Clan"
+            Dim memberCount As String = "N/A"
 
-        If clanData IsNot Nothing Then
-            clanName = clanData("name")?.ToString()
-            memberCount = clanData("members")?.ToString()
-        End If
+            If clanData IsNot Nothing Then
+                clanName = clanData("name")?.ToString()
+                memberCount = clanData("members")?.ToString()
+            End If
 
-        ' Official working Supercell web link redirect
-        Dim cleanTag As String = clanTag.Replace("#", "")
-        Dim cocDeepLink As String = $"https://link.clashofclans.com/en/?action=OpenClanProfile&tag={cleanTag}"
+            ' Official working Supercell web link redirect
+            Dim cleanTag As String = clanTag.Replace("#", "")
+            Dim cocDeepLink As String = $"https://link.clashofclans.com/en/?action=OpenClanProfile&tag={cleanTag}"
 
-        ' Build simple clean UI layout response
-        Dim embed As New EmbedBuilder() With {
+            ' Build simple clean UI layout response
+            Dim embed As New EmbedBuilder() With {
             .Title = $"🔗 Join Link: {clanName}",
             .Color = Color.Green,
             .Timestamp = DateTimeOffset.Now
         }
 
-        embed.WithDescription($"Click the link below to view or join **{clanName}** inside the Clash of Clans app!{Environment.NewLine}{Environment.NewLine}" &
+            embed.WithDescription($"Click the link below to view or join **{clanName}** inside the Clash of Clans app!{Environment.NewLine}{Environment.NewLine}" &
                               $"👉 **[Open Profile & Join ({clanTag})]({cocDeepLink})**")
 
-        embed.AddField("Current Status", $"👥 **Members:** {memberCount}/50", inline:=True)
-        embed.WithFooter(footer:=New EmbedFooterBuilder().WithText("`Pak Admin Bot System`"))
+            embed.AddField("Current Status", $"👥 **Members:** {memberCount}/50", inline:=True)
+            embed.WithFooter(footer:=New EmbedFooterBuilder().WithText("`Pak Admin Bot System`"))
 
-        Await command.ModifyOriginalResponseAsync(Sub(p) p.Embed = embed.Build())
-    End Function
+            Await command.ModifyOriginalResponseAsync(Sub(p) p.Embed = embed.Build())
+        End Function
 
-    ''' <summary>
-    ''' Resolves a Discord user to all their linked Clash of Clans accounts.
-    ''' Fully protected against Discord's 4096 description and 6000 total character limits.
-    ''' </summary>
-    Public Async Function HandleWhoIsCommandAsync(command As SocketSlashCommand, client As DiscordSocketClient) As Task
-        ' Defer response immediately since we are querying both Oracle DB and the external Supercell API
-        Await command.DeferAsync()
 
-        Dim rawInput As String = command.Data.Options.First().Value.ToString().Trim()
-        Dim targetIdStr As String = ""
-        Dim targetUserId As ULong
+        Public Shared Async Function HandleAutoCompleteClansAsync(autocomplete As SocketAutocompleteInteraction) As Task
+            ' Get what the user has typed so far
+            Dim userInput As String = autocomplete.Data.Options.First().Value.ToString().ToLower()
 
-        ' =========================================================================
-        ' PHASE 1: USER RESOLUTION (Autocomplete ID vs Manual Typing)
-        ' =========================================================================
-        If ULong.TryParse(rawInput, targetUserId) Then
-            ' Case A: Selected from Autocomplete list (rawInput is a valid numeric Discord ID)
-            targetIdStr = targetUserId.ToString()
-        Else
-            ' Case B: Typed a name manually (e.g., "Tom") instead of clicking the list
-            ' We search the Oracle Database live for a matching name to find their real Discord ID
-            targetIdStr = Await OracleDatabaseManager.GetIdByNameAsync(rawInput)
-            If String.IsNullOrEmpty(targetIdStr) OrElse Not ULong.TryParse(targetIdStr, targetUserId) Then
-                Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = $"❌ Could not find any registered user matching `{rawInput}` in the database. Please use the autocomplete list.")
-                Return
-            End If
-        End If
+            ' Fetch all registered clans for this server from Oracle DB
+            Dim clans = Await OracleDatabaseManager.GetClansAsync(autocomplete.GuildId.Value)
 
-        ' Fetch the user profile from Discord. First check local cache, fallback to REST API (crucial for Cloud VMs)
-        Dim targetUser As IUser = client.GetUser(targetUserId)
-        If targetUser Is Nothing Then
+            ' Filter based on user typing (matches name or tag)
+            Dim matches = clans.Where(Function(c) c.Item1.ToLower().Contains(userInput) OrElse c.Item2.ToLower().Contains(userInput)).Take(25)
+
+            Dim results As New List(Of AutocompleteResult)()
+            For Each clan In matches
+                ' Preview format in the dropdown list: "PK CWL 27 (#2JLJVYQPU)"
+                Dim previewText As String = $"{clan.Item2} ({clan.Item1})"
+                ' Value sent to the bot execution backend will be the clean tag
+                results.Add(New AutocompleteResult(previewText, clan.Item1))
+            Next
+
+            Await autocomplete.RespondAsync(results)
+        End Function
+
+        Public Shared Async Function HandleClanlistUpdate(component As SocketMessageComponent) As Task
             Try
-                ' Fetches user profile live from Discord servers over HTTP
-                targetUser = Await client.Rest.GetUserAsync(targetUserId)
-            Catch ex As Exception
-                Console.WriteLine($"[DISCORD API WARNING] Failed to fetch REST profile for ID {targetUserId}: {ex.Message}")
-            End Try
-        End If
+                Await component.DeferAsync()
 
-        ' =========================================================================
-        ' PHASE 2: DATABASE LOOKUP (Fetch linked accounts from Oracle Autonomous DB)
-        ' =========================================================================
-        Dim linkedAccounts As List(Of Tuple(Of String, String, String)) = Await OracleDatabaseManager.GetLinkedAccountsAsync(targetIdStr)
+                ' Invoke the identical central core engine to pull brand new live stats
+                Dim messageData = Await ClanManager.BuildClanListMessageAsync(component.GuildId.Value)
 
-        If linkedAccounts Is Nothing OrElse linkedAccounts.Count = 0 Then
-            Dim fallbackName As String = If(targetUser IsNot Nothing, targetUser.Username, rawInput)
-            Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = $"ℹ️ **{fallbackName}** does not have any Clash of Clans accounts linked to this server's database.")
-            Return
-        End If
-
-        ' Visual indicator formatting
-
-
-        ' =========================================================================
-        ' PHASE 3: PARALLEL API REQUESTS & MULTI-EMBED CONSTRUCTION
-        ' =========================================================================
-        Dim embedTitle As String = If(targetUser IsNot Nothing, If(targetUser.GlobalName, targetUser.Username), rawInput)
-        Dim userAvatarUrl As String = If(targetUser IsNot Nothing, If(targetUser.GetAvatarUrl(), targetUser.GetDefaultAvatarUrl()), Nothing)
-
-        Dim embedList As New List(Of Embed)()
-
-        Dim currentEmbed As New EmbedBuilder() With {
-            .Title = $"📋 Account Profile: {embedTitle}",
-            .Color = Color.Blue,
-            .Timestamp = DateTimeOffset.Now
-        }
-        If Not String.IsNullOrEmpty(userAvatarUrl) Then currentEmbed.WithThumbnailUrl(userAvatarUrl)
-
-        Dim headerText As New StringBuilder()
-        headerText.AppendLine($"**Discord Account:** {If(targetUser IsNot Nothing, targetUser.Mention, "`" & rawInput & "`")}")
-        headerText.AppendLine()
-        currentEmbed.WithDescription(headerText.ToString())
-
-        Dim cocApi As New ClashOfClansAPI(CocService.apiToken)
-        Dim apiTasks As New List(Of Task(Of Tuple(Of String, String, String, String)))()
-
-        For Each account In linkedAccounts
-            Dim tag As String = account.Item1
-            Dim dbName As String = account.Item2
-            Dim individualVerified As String = account.Item3
-
-            ' FIX 1: Wenn es sich um das Dummy-Tag handelt, überspringen wir die Supercell-API komplett
-            If tag = "#0" Then
-                ' Wir fügen einen sofort abgeschlossenen Task hinzu, um das System parallel zu halten
-                apiTasks.Add(Task.FromResult(Tuple.Create("#0", "No Account", "No Clan", individualVerified)))
-            Else
-                ' Echter Account: Wird wie gewohnt parallel im Hintergrund abgefragt
-                Dim fetchTask = Task.Run(Async Function() As Task(Of Tuple(Of String, String, String, String))
-                                             Dim livePlayerName As String = dbName
-                                             Dim liveClanName As String = "No Clan"
-                                             Try
-                                                 Dim playerData As JObject = Await cocApi.GetPlayerDataAsync(tag)
-                                                 If playerData IsNot Nothing Then
-                                                     If playerData("name") IsNot Nothing Then livePlayerName = playerData("name").ToString()
-                                                     If playerData("clan") IsNot Nothing AndAlso playerData("clan")("name") IsNot Nothing Then
-                                                         liveClanName = playerData("clan")("name").ToString()
-                                                     End If
-                                                 End If
-                                             Catch
-                                                 liveClanName = "⚠️ Live API Error"
-                                             End Try
-                                             Return Tuple.Create(tag, livePlayerName, liveClanName, individualVerified)
-                                         End Function)
-                apiTasks.Add(fetchTask)
-            End If
-        Next
-
-        ' Alle Tasks abwarten (die #0 Tasks sind sofort fertig)
-        Dim completedResults As Tuple(Of String, String, String, String)() = Await Task.WhenAll(apiTasks)
-
-        Dim currentChunk As New StringBuilder()
-        Dim totalEstimatedLength As Integer = currentEmbed.Title.Length + headerText.Length
-        Dim fieldIndex As Integer = 1
-
-        For Each result In completedResults
-            Dim tag As String = result.Item1
-            Dim livePlayerName As String = result.Item2
-            Dim liveClanName As String = result.Item3
-            Dim individualVerified As String = result.Item4
-
-            Dim accountLine As String = ""
-
-            ' FIX 2: Visuelle Ausgabe für Dummy-Accounts anpassen (Kein Link, sauberer Text)
-            If tag = "#0" Then
-                accountLine = "• *No Clash of Clans account linked to this profile.*" & Environment.NewLine
-            Else
-                ' Normaler Account mit funktionierendem Deep Link
-                Dim verifiedEmoji As String = If(individualVerified.Equals("Yes", StringComparison.OrdinalIgnoreCase), " ✅", " ❌")
-                Dim cleanTagForUrl As String = tag.Replace("#", "").ToUpper()
-                Dim playerDeepLink As String = $"https://link.clashofclans.com/en?action=OpenPlayerProfile&tag={cleanTagForUrl}"
-
-                accountLine = $"• [{livePlayerName} ({tag})]({playerDeepLink}) | **{liveClanName}**{verifiedEmoji}" & Environment.NewLine
-            End If
-
-            ' Zeichenbegrenzungs-Check für Discord
-            If (currentChunk.Length + accountLine.Length > 950) OrElse (totalEstimatedLength + currentChunk.Length + accountLine.Length > 5200) Then
-                If currentChunk.Length > 0 Then
-                    Dim titleText As String = If(fieldIndex = 1, "**Linked Clash of Clans Accounts:**", $"**Linked Accounts (Part {fieldIndex}):**")
-                    currentEmbed.AddField(titleText, currentChunk.ToString(), inline:=False)
-                    fieldIndex += 1
-                End If
-
-                If totalEstimatedLength + currentChunk.Length > 5200 Then
-                    embedList.Add(currentEmbed.Build())
-                    currentEmbed = New EmbedBuilder() With {
-                        .Title = $"📋 Account Profile: {embedTitle} (Continued)",
-                        .Color = Color.Blue
-                    }
-                    totalEstimatedLength = currentEmbed.Title.Length
+                If messageData IsNot Nothing Then
+                    ' Modify the existing UI frame with synchronized dataset changes
+                    Await component.ModifyOriginalResponseAsync(Sub(p)
+                                                                    p.Embed = messageData.Item1
+                                                                    p.Components = messageData.Item2
+                                                                End Sub)
+                    API_COC.DebugPrint("[BUTTON SUCCESS] Clan list embed was synchronized perfectly via code re-use.")
                 Else
-                    totalEstimatedLength += currentChunk.Length + 50
+                    Await component.ModifyOriginalResponseAsync(Sub(p)
+                                                                    p.Content = "ℹ️ No clans are registered to this server database. Use `/clan-add` to begin."
+                                                                    p.Embed = Nothing
+                                                                    p.Components = Nothing
+                                                                End Sub)
                 End If
+            Catch ex As Exception
+                Console.WriteLine($"[BUTTON CRITICAL] Failed to execute interactive code re-use pipeline: {ex.Message}")
+            End Try
 
-                currentChunk = New StringBuilder()
-            End If
-
-            currentChunk.Append(accountLine)
-        Next
-
-        ' Restliche Accounts anhängen
-        If currentChunk.Length > 0 Then
-            Dim titleText As String = If(fieldIndex = 1, "**Linked Clash of Clans Accounts:**", $"**Linked Accounts (Part {fieldIndex}):**")
-            currentEmbed.AddField(titleText, currentChunk.ToString(), inline:=False)
-        End If
-
-        currentEmbed.WithFooter(New EmbedFooterBuilder().WithText($"Total Accounts: {linkedAccounts.Where(Function(a) a.Item1 <> "#0").Count()} | Powered by Oracle Cloud"))
-        embedList.Add(currentEmbed.Build())
-
-
-
-        ' =========================================================================
-        ' PHASE 4: SEND RESPONSE (Splits messages into separate HTTP requests)
-        ' =========================================================================
-        If embedList.Count = 0 Then
-            Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = "❌ Error processing profile formatting.")
-            Return
-        End If
-
-        ' 1. Send the FIRST main embed as the original interaction response
-        Await command.ModifyOriginalResponseAsync(Sub(p)
-                                                      p.Embed = embedList(0)
-                                                  End Sub)
-
-        ' 2. If there are more embeds (Continued parts), send them as independent Follow-up messages
-        ' This bypasses Discord's combined 6000 character restriction completely!
-        If embedList.Count > 1 Then
-            For i As Integer = 1 To embedList.Count - 1
-                Try
-                    ' Sends each continuing embed block as a separate message stream
-                    Await command.FollowupAsync(embed:=embedList(i))
-                    ' Small safety delay to prevent Discord API rate-limiting on your OCI Instance
-                    Await Task.Delay(200)
-                Catch ex As Exception
-                    Console.WriteLine($"[DISCORD API ERROR] Failed to send followup embed part {i}: {ex.Message}")
-                End Try
-            Next
-        End If
-    End Function
-    ''' <summary>
-    ''' Fetches all members of FWA clans and dynamically creates a custom-named table.
-    ''' </summary>
-    ''' <summary>
-    ''' Fetches all members of FWA clans and dynamically creates a custom-named table.
-    ''' Activated via Discord SocketSlashCommand interface interaction.
-    ''' </summary>
-    Public Async Function HandleRosterCreateAsync(command As SocketSlashCommand) As Task
-        ' 1. Acknowledge and secure the critical 3-second Discord API interaction window
-        Await command.DeferAsync()
-
-        ' 2. Safely extract the raw string parameter entered by the user
-        Dim tableNameOption = command.Data.Options.FirstOrDefault(Function(o) o.Name = "table-name")
-        If tableNameOption Is Nothing OrElse tableNameOption.Value Is Nothing Then
-            Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = "❌ **Error:** Missing required parameter `tablename`.")
-            Return
-        End If
-
-        ' 3. Sanitize input to conform to strict Oracle Database naming rules
-        Dim rawTableName As String = tableNameOption.Value.ToString()
-        Dim sanitizedTableName As String = rawTableName.Replace("#", "").Replace(" ", "_").Trim().ToUpper()
-
-        If String.IsNullOrEmpty(sanitizedTableName) OrElse sanitizedTableName.Length > 30 Then
-            Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = "❌ **Error:** Invalid table name. Use alphanumeric characters only (max 30).")
-            Return
-        End If
-
-        ' 4. Send initial pipeline progress update tracking state
-        Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = $"⏳ **Step 1/4:** Recreating dynamic table `{sanitizedTableName}` on Oracle Cloud...")
-
-        ' Variables to handle conditional error routing outside the Catch block scope
-        Dim isCrashed As Boolean = False
-        Dim errorMessage As String = ""
-
-        Try
-            ' =========================================================================
-            ' STEP A: Recreate the Target Table
-            ' =========================================================================
-            Await CreateDynamicRosterTableAsync(sanitizedTableName)
-            Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = "⏳ **Step 2/4:** Table created. Loading Discord user mapping dictionary into memory...")
-
-            ' =========================================================================
-            ' STEP B: Load Performance Mappings from Database Cache
-            ' =========================================================================
-            Dim discordMappings As Dictionary(Of String, Tuple(Of String, String)) = Await GetDiscordMappingsAsync()
-            Dim fwaClans As List(Of Tuple(Of String, String, String)) = Await GetClansByCategoryAsync("FWA")
-
-            If fwaClans.Count = 0 Then
-                Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = "❌ **Pipeline Aborted:** No clans categorized as 'FWA' were found in `tracked_clans` table.")
-                Return
-            End If
-
-            Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = $"⏳ **Step 3/4:** Found {fwaClans.Count} FWA clans. Fetching live player rosters via Cocapi...")
-            ' =========================================================================
-            ' STEP C: Query Roster Data with Clan Name & Roster Name via Clash of Clans Web API
-            ' =========================================================================
-            ' FIX: Nutzt jetzt die saubere Objektklasse statt des fehlerhaften Tuples
-            Dim finalRosterList As New List(Of RosterPlayer)()
-
-            Dim cocApiClient As New ClashOfClansAPI(CocService.apiToken)
-
-            For Each clan In fwaClans
-                Dim clanTag As String = clan.Item1
-                Dim clanJson As Newtonsoft.Json.Linq.JObject = Await cocApiClient.GetClanDataAsync(clanTag)
-
-                If clanJson IsNot Nothing AndAlso clanJson("memberList") IsNot Nothing Then
-                    Dim currentClanName As String = If(clanJson("name")?.ToString(), "Unknown Clan")
-                    Dim memberListArray As Newtonsoft.Json.Linq.JArray = CType(clanJson("memberList"), Newtonsoft.Json.Linq.JArray)
-
-                    For Each member In memberListArray
-                        Dim rawPlayerTag As String = member("tag")?.ToString()
-                        If String.IsNullOrEmpty(rawPlayerTag) Then Continue For
-
-                        Dim normalizedPlayerTag As String = rawPlayerTag.ToUpper().Trim()
-
-                        Dim weightRecord = Await GetWeightByTagAsync(normalizedPlayerTag)
-                        Dim resolvedWeight As Integer = If(weightRecord IsNot Nothing, weightRecord.Weight, 0)
-
-                        Dim discordId As String = ""
-                        Dim discordName As String = ""
-                        If discordMappings.ContainsKey(normalizedPlayerTag) Then
-                            discordId = discordMappings(normalizedPlayerTag).Item1
-                            discordName = discordMappings(normalizedPlayerTag).Item2
-                        End If
-
-                        ' Befülle das Objekt mit sprechenden Namen
-                        Dim newPlayer As New RosterPlayer() With {
-                            .PlayerTag = normalizedPlayerTag,
-                            .PlayerName = If(member("name")?.ToString(), ""),
-                            .ThLevel = If(member("townHallLevel") IsNot Nothing, Convert.ToInt32(member("townHallLevel")), 0),
-                            .Weight = resolvedWeight,
-                            .ClanName = currentClanName,
-                            .RosterName = " ",
-                            .DiscordId = discordId,
-                            .DiscordName = discordName
-                        }
-
-                        finalRosterList.Add(newPlayer)
-                    Next
-                End If
-            Next
-
-            If finalRosterList.Count = 0 Then
-                Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = "❌ **Pipeline Aborted:** Successfully scanned clans, but retrieved zero active players.")
-                Return
-            End If
-
-            Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = $"⏳ **Step 4/4:** Scraping finished. Bulk uploading {finalRosterList.Count} players directly to Oracle AI Database...")
-
-            ' =========================================================================
-            ' STEP D: Perform Single-Roundtrip High-Speed Bulk Insertion
-            ' =========================================================================
-            Dim savedRowsCount As Integer = Await BulkInsertDynamicRosterAsync(sanitizedTableName, finalRosterList)
-
-            ' Build a professional embed response summary payload report card
-            Dim successSummary As String = $"✅ **Roster Pipeline Complete!**" & vbCrLf &
-                                           $"📋 Table Target: `{sanitizedTableName}`" & vbCrLf &
-                                           $"🛡️ Scanned FWA Clans: `{fwaClans.Count}`" & vbCrLf &
-                                           $"👥 Total Players Saved: `{savedRowsCount}`"
-
-            Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = successSummary)
-            API_COC.DebugPrint($"[PIPELINE SUCCESS] Executed roster compilation into table {sanitizedTableName}.")
-            Return
-
-        Catch ex As Exception
-            ' Safe execution boundary fallback layout parsing 
-            API_COC.DebugPrint($"[PIPELINE CRITICAL] Failure compiling roster for {sanitizedTableName}: {ex.Message}")
-            ' FIX: Extract metrics inside Catch block without performing Await operations
-            isCrashed = True
-            errorMessage = ex.Message
-        End Try
-        ' FIX: Dispatch the asynchronous Discord alert down here, safely outside of the Catch wrapper block
-        If isCrashed Then
-            Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = $"❌ **Pipeline Execution Crashed!** " & vbCrLf & $"`{errorMessage}`")
-        End If
-
-    End Function
-
-    ''' <summary>
-    ''' Fetches all members of FWA clans and dynamically creates a custom-named table.
-    ''' </summary>
-    Public Async Function HandleWeigthUpdateAsync(command As SocketSlashCommand) As Task
-        ' FIX 1: Instantly acknowledge the interaction to secure a 15-minute processing window
-        Await command.DeferAsync()
-
-        ' Track crash states safely outside the catch block scope
-        Dim isCrashed As Boolean = False
-        Dim errorText As String = ""
-
-        Try
-            ' Push the initial visual update using the tokenized interaction hook
-            Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = "⏳ **Step 1/3:** Dropping and recreating relational `WEIGHTS` schema...")
-
-            ' 1. Recreate table structure
-            Await RecreateWeightsTableAsync()
-            Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = "⏳ **Step 2/3:** Structural reset complete. Opening streaming pipeline to fwastats.com...")
-
-            ' 2. Stream dataset over network
-            Dim freshRecords As List(Of FwaRecord) = Await GetPlayerWeightsFromWeb()
-
-            If freshRecords IsNot Nothing AndAlso freshRecords.Count > 0 Then
-                Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = $"⏳ **Step 3/3:** Successfully decoded {freshRecords.Count} entries. Performing Oracle Bulk-Insert...")
-
-                ' 3. Bulk insert into Oracle AI Database
-                Await SaveFwaDataAsync(freshRecords)
-
-                ' Final Success Receipt Output
-                Dim finalSummary As String = $"✅ **Weight Update Complete!**" & vbCrLf &
-                                             $"📋 Relational Destination Table: `WEIGHTS`" & vbCrLf &
-                                             $"👥 Total Cached Elements: `{freshRecords.Count}`"
-
-                ' FIX 2: Modify the original token response instead of calling a new separate channel print action
-                Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = finalSummary)
-                API_COC.DebugPrint("[COMMAND SUCCESS] /weight-update completed execution cycle successfully.")
-            Else
-                Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = "❌ **Pipeline Failed:** Zero data records fetched over the network channel.")
-            End If
-
-        Catch ex As Exception
-            isCrashed = True
-            errorText = ex.Message
-            API_COC.DebugPrint("[COMMAND EXCEPTION] Runtime failure during execution: " & errorText)
-        End Try
-
-        ' Safe post-exception routing block bypassing structural compiler rules
-        If isCrashed Then
-            Await command.ModifyOriginalResponseAsync(Sub(p) p.Content = $"❌ **Critical Error:** Update routine crashed!" & vbCrLf & $"`{errorText}`")
-        End If
-
-        ' 1. Sichert das 3-Sekunden-Zeitfenster auf deiner Oracle Linux VM
-        Await command.DeferAsync()
-        API_COC.DebugPrint("[COMMAND] Execution triggered via /weight-update.")
-
-        ' 2. Nutze die Roster-Initialisierungsmethode direkt für das manuelle Update
-        Await OracleDatabaseManager.RecreateWeightsTableAsync()
-        Await SaveFwaDataAsync(Await GetPlayerWeightsFromWeb())
-        ' 3. Prüfung und Antwort an den Discord-Kanal senden
-
-        API_COC.DebugPrint($"[COMMAND SUCCESS] /weight-update completed.")
-        Await command.RespondAsync($"[COMMAND SUCCESS] /weight-update completed.", ephemeral:=True)
-
-    End Function
+        End Function
+    End Class
 
 End Module

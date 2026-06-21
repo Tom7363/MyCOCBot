@@ -1,0 +1,13 @@
+{
+  "Title": "🏆 Lazy CWL Clans Overview",
+  "Description": "Here are the current Open Slots in Lazy CWL clans :\n\n{CLAN_ROWS}",
+  "Color": "3447003",
+  "Fields": [
+    {
+      "Name": "📊 Summary",
+      "Value": "⚔️ **Total Lazy CWL Clans:** {TOTAL_CLANS}",
+      "IsInline": false
+    }
+  ],
+  "FooterText": "Clash of Clans Bot | Live Supercell API Sync"
+}

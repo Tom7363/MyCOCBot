@@ -35,6 +35,11 @@ Public Module OracleDatabaseManager
         End If
     End Function
 
+    Public ReadOnly Property OpenConnection As OracleConnection
+        Get
+            Return conn
+        End Get
+    End Property
     ' English Code Comments
     ''' <summary>
     ''' Validates the Oracle Cloud connection pool and force-recovers the state if dropped by the OCI firewall.
